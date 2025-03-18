@@ -3,7 +3,8 @@ import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 import json
 import os
-import moviepy.editor as mp
+import subprocess
+import ffmpeg
 
 
 def get_video_id(youtube_url):
@@ -40,8 +41,7 @@ def download_video(youtube_url, output_path="video.mp4"):
 
 
 def extract_important_parts(transcript, model="gpt-4-turbo"):
-    api_key = os.getenv(
-        "OPENAI_API_KEY")
+    api_key = "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"
 
     if not api_key:
         print("Error: OpenAI API key not set. Please set the OPENAI_API_KEY environment variable.")
@@ -90,17 +90,52 @@ def extract_important_parts(transcript, model="gpt-4-turbo"):
         return []
 
 
-def create_shorts(video_path, segments, output_path="shorts.mp4"):
+def create_shorts_ffmpeg(video_path, segments, output_path="shorts.mp4"):
 
     try:
-        video = mp.VideoFileClip(video_path)
-        clips = [video.subclip(seg['start_time'], seg['end_time'])
-                 for seg in segments]
-        final_clip = mp.concatenate_videoclips(clips)
-        final_clip.write_videofile(output_path, codec='libx264', fps=30)
+
+        temp_files = []
+        for i, seg in enumerate(segments):
+            start = seg['start_time']
+            end = seg['end_time']
+            duration = end - start
+
+            out_file = f"temp_segment_{i}.mp4"
+            temp_files.append(out_file)
+
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', video_path,
+                '-ss', str(start),
+                '-t', str(duration),
+                '-c', 'copy',
+                out_file
+            ]
+            subprocess.run(cmd, check=True)
+            print(f"Extracted segment {i+1}/{len(segments)}")
+
+        with open('segments.txt', 'w') as f:
+            for temp_file in temp_files:
+                f.write(f"file '{temp_file}'\n")
+
+        concat_cmd = [
+            'ffmpeg', '-y',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', 'segments.txt',
+            '-c', 'copy',
+            output_path
+        ]
+        subprocess.run(concat_cmd, check=True)
+
+        # Clean up temporary files
+        for temp_file in temp_files:
+            os.remove(temp_file)
+        os.remove('segments.txt')
+
         print(f"Shorts video saved to {output_path}")
     except Exception as e:
-        print("Error creating Shorts video:", e)
+        print(f"Error creating Shorts video: {e}")
 
 
 def main():
@@ -124,7 +159,7 @@ def main():
         print("Failed to download video.")
         return
 
-    create_shorts(video_path, segments)
+    create_shorts_ffmpeg(video_path, segments)
 
 
 if __name__ == "__main__":
