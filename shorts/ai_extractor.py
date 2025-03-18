@@ -1,17 +1,23 @@
 import openai
 import json
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+Kluster_key = os.getenv("my_klusterai_api_key")
 
 
-def extract_important_parts(transcript, model="gpt-4-turbo"):
+def extract_important_parts(transcript, model="klusterai/Meta-Llama-3.1-405B-Instruct-Turbo"):
     """Use AI to extract key timestamps for Shorts."""
-    api_key = "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"
+    # api_key = "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"
 
-    if not api_key:
-        print("Error: OpenAI API key not set. Please set the OPENAI_API_KEY environment variable.")
-        return []
+    # if not api_key:
+    #     print("Error: OpenAI API key not set. Please set the OPENAI_API_KEY environment variable.")
+    #     return []
 
-    client = openai.OpenAI(api_key=api_key)
+    client = openai.OpenAI(
+        base_url="https://api.kluster.ai/v1",
+        api_key=Kluster_key)
 
     transcript_text = "\n".join(
         [f"[{entry['start']}] {entry['text']}" for entry in transcript])

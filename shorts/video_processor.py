@@ -54,69 +54,68 @@ def add_subtitles(video_path, subtitle_path, output_path, font_size=22):
 
 
 def process_segment(video_path, segment, transcript_data, aspect_ratio="9:16", output_path="output.mp4",
-                    font_size=42, words_per_subtitle=2, segment_id=1, total_segments=1):
+                    font_size=42, words_per_subtitle=2, segment_id=1, total_segments=1, temp_dir=None):
     """Process a single segment into a complete short video."""
     try:
-        # Create a unique temp directory for this process
-        unique_id = str(uuid.uuid4())[:8]
-        temp_dir = f"temp_{segment_id}_{unique_id}"
-        os.makedirs(temp_dir, exist_ok=True)
-
-        print(
-            f"[Segment {segment_id}/{total_segments}] Starting processing...")
         process_start_time = time.time()
 
-        # Get segment timestamps
+        # Get segment timestamps (these are used for subtitles)
         start_time = float(segment.get('start_time', 0))
         end_time = float(segment.get('end_time', start_time + 30))
 
-        # Validate segment duration
-        if end_time <= start_time:
-            print(
-                f"[Segment {segment_id}] Warning: Invalid segment times. Using default 30 second duration.")
-            end_time = start_time + 30
+        # For creating subtitles, we need to adjust times to be relative to the segment
+        # Since we're downloading just the segment, the video starts at 0, not at start_time
+        local_start_time = 0
+        local_end_time = end_time - start_time
 
-        duration = end_time - start_time
-        print(
-            f"[Segment {segment_id}] Processing clip of duration: {duration:.2f}s")
-
-        # 1. Extract segment from full video
-        raw_segment = f"{temp_dir}/raw_segment.mp4"
-        print(f"[Segment {segment_id}] Extracting segment from full video...")
-        if not extract_segment(video_path, start_time, end_time, raw_segment):
-            raise Exception("Failed to extract segment")
-
-        # 2. Create subtitle file for this segment
+        # Create subtitle file
         subtitle_file = f"{temp_dir}/subtitles.srt"
         print(f"[Segment {segment_id}] Creating word-by-word subtitles...")
+
+        # Get transcript for this time range
+        segment_transcript = [
+            {
+                'start': entry['start'] - start_time,  # Adjust to start at 0
+                'duration': entry['duration'],
+                'text': entry['text']
+            }
+            for entry in transcript_data
+            if entry['start'] >= start_time and entry['start'] < end_time
+        ]
+
         create_word_by_word_subtitle_file(
-            transcript_data,
-            start_time,
-            end_time,
+            segment_transcript,
+            local_start_time,  # now 0
+            local_end_time,    # relative duration
             subtitle_file,
             words_per_subtitle
         )
 
-        # 3. Process with face tracking
+        # Track faces and apply aspect ratio
         tracked_segment = f"{temp_dir}/tracked_segment.mp4"
         print(f"[Segment {segment_id}] Applying face tracking...")
-        if not track_face_and_crop_mediapipe(raw_segment, tracked_segment, aspect_ratio, segment_id, total_segments):
+        if not track_face_and_crop_mediapipe(video_path, tracked_segment, aspect_ratio, segment_id, total_segments):
             raise Exception("Failed face tracking")
 
-        # 4. Add subtitles
+        # Add subtitles
         print(f"[Segment {segment_id}] Adding subtitles...")
-        if not add_subtitles(tracked_segment, subtitle_file, output_path, font_size):
-            raise Exception("Failed to add subtitles")
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', tracked_segment,
+            '-vf', f"subtitles={subtitle_file}:force_style='FontName=Arial,FontSize={font_size},PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=1,Outline=0,Shadow=0,Alignment=2'",
+            '-c:a', 'copy',  # Copy audio stream without re-encoding
+            '-vsync', 'cfr',  # Constant frame rate for better A/V sync
+            output_path
+        ]
 
-        # 5. Clean up temp directory
-        print(f"[Segment {segment_id}] Cleaning up temporary files...")
         try:
-            for file in os.listdir(temp_dir):
-                os.remove(os.path.join(temp_dir, file))
-            os.rmdir(temp_dir)
-        except Exception as e:
-            print(
-                f"[Segment {segment_id}] Warning: Failed to clean up temporary files: {e}")
+            result = subprocess.run(
+                cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[Segment {segment_id}] Error adding subtitles: {e}")
+            if e.stderr:
+                print(f"FFMPEG error: {e.stderr}")
+            return False
 
         process_end_time = time.time()
         print(

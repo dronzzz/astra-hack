@@ -148,10 +148,11 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16", 
         'ffmpeg', '-y',
         '-i', temp_video,
         '-i', input_file,
-        '-c:v', 'libx264',  # Use libx264 for better compatibility
-        '-preset', 'medium',  # Balance between quality and speed
-        '-crf', '23',  # Quality setting (lower is better)
-        '-vsync', 'cfr',  # Constant frame rate for better sync
+        '-c:v', 'libx264',     # Use libx264 for better quality
+        '-preset', 'medium',   # Balance between quality and speed
+        '-crf', '18',          # High quality (lower is better)
+        '-vsync', 'cfr',       # Constant frame rate
+        '-pix_fmt', 'yuv420p',  # Standard pixel format for compatibility
         '-map', '0:v:0',
         '-map', '1:a:0',
         '-shortest',
