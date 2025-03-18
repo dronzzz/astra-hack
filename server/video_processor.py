@@ -39,7 +39,7 @@ def add_subtitles(input_video, subtitle_file, output_video, font_size=24):
         cmd = [
             'ffmpeg', '-y',
             '-i', input_video,
-            '-vf', f'subtitles={subtitle_file}:force_style=\'FontSize={font_size},BorderStyle=4,Outline=1,Shadow=0,Alignment=2,Bold=1\'',
+            '-vf', f'subtitles={subtitle_file}:force_style=\'FontSize={font_size},BorderStyle=0,Outline=0,Shadow=0,Alignment=2,Bold=1\'',
             '-c:v', 'libx264',
             '-preset', 'fast',  # Balance between speed and quality
             '-crf', '23',       # Good quality, not too large
@@ -65,22 +65,26 @@ def add_subtitles(input_video, subtitle_file, output_video, font_size=24):
         return False
 
 
-def extract_thumbnail(video_path, output_path):
-    """Extract a thumbnail from a video file using ffmpeg"""
+def extract_thumbnail(video_path, thumbnail_path):
+    """Extract a thumbnail from the video."""
     try:
-        logger.info(f"Generating thumbnail from {video_path} to {output_path}")
+        # Create a simple thumbnail using ffmpeg
         cmd = [
             'ffmpeg', '-y',
             '-i', video_path,
-            '-ss', '00:00:01',  # Take frame from 1 second in
-            '-vframes', '1',    # Take just one frame
+            '-ss', '00:00:01',  # Take frame at 1 second
+            '-vframes', '1',
             '-q:v', '2',        # High quality
-            output_path
+            thumbnail_path
         ]
-        subprocess.run(cmd, check=True, capture_output=True)
-        return True
+        subprocess.run(cmd, check=True)
+        
+        # Verify the thumbnail was created
+        if os.path.exists(thumbnail_path):
+            return True
+        return False
     except Exception as e:
-        logger.error(f"Error extracting thumbnail: {e}")
+        print(f"Error extracting thumbnail: {str(e)}")
         return False
 
 

@@ -172,7 +172,7 @@ def upload_file():
         
         aspect_ratio = request.form.get('aspectRatio', '9:16')
         words_per_subtitle = int(request.form.get('wordsPerSubtitle', 2))
-        font_size = int(request.form.get('fontSize', 36))
+        font_size = int(request.form.get('fontSize', 16))
         
         # Generate job ID
         job_id = str(uuid.uuid4())
@@ -316,32 +316,6 @@ def is_valid_mp4(file_path):
         logger.error(f"Error validating MP4: {str(e)}")
         return False
 
-def extract_thumbnail(video_path, output_path):
-    """Generate a thumbnail from a video file using ffmpeg."""
-    try:
-        # Make sure we capture a frame at 1 second to avoid black frames
-        cmd = [
-            'ffmpeg', '-y',
-            '-i', video_path,
-            '-ss', '00:00:01',  # Take frame at 1 second
-            '-frames:v', '1',
-            '-q:v', '2',       # High quality
-            '-vf', 'scale=640:-1',  # Resize to reasonable width
-            output_path
-        ]
-        subprocess.run(cmd, check=True)
-        
-        # Verify thumbnail was created
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-            logger.info(f"Generated thumbnail: {output_path}")
-            return True
-        else:
-            logger.error(f"Failed to generate valid thumbnail: {output_path}")
-            return False
-    except Exception as e:
-        logger.error(f"Error generating thumbnail: {str(e)}")
-        return False
-
 def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, font_size):
     logger.info(f"Starting video processing job: {job_id}")
     try:
@@ -436,64 +410,18 @@ def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, fon
                     
                     if success:
                         logger.info(f"Successfully processed segment {i+1}")
-                        # Extra step to ensure video is web-compatible
-                        def ensure_web_compatible_video(input_file, output_file=None):
-                            """Ensure video is encoded in a web-compatible format."""
-                            if output_file is None:
-                                output_file = f"{os.path.splitext(input_file)[0]}_web.mp4"
-                            
-                            try:
-                                cmd = [
-                                    'ffmpeg', '-y',
-                                    '-i', input_file,
-                                    '-c:v', 'libx264',
-                                    '-profile:v', 'main',
-                                    '-preset', 'fast',
-                                    '-crf', '23',
-                                    '-movflags', '+faststart',
-                                    '-pix_fmt', 'yuv420p',
-                                    '-c:a', 'aac',
-                                    '-b:a', '128k',
-                                    output_file
-                                ]
-                                subprocess.run(cmd, check=True)
-                                
-                                if os.path.exists(output_file) and os.path.getsize(output_file) > 10000:
-                                    return output_file
-                                return None
-                            except Exception as e:
-                                logger.error(f"Error making video web compatible: {str(e)}")
-                                return None
-
-                        # After processing each segment and creating output_filename
-                        final_video_path = output_filename
-                        web_compatible_path = ensure_web_compatible_video(output_filename)
-                        if web_compatible_path:
-                            final_video_path = web_compatible_path
-                            # If we created a new file, rename it to the original
-                            if web_compatible_path != output_filename:
-                                try:
-                                    os.replace(web_compatible_path, output_filename)
-                                    final_video_path = output_filename
-                                except Exception as e:
-                                    logger.error(f"Error replacing video with web compatible version: {str(e)}")
-
-                        # Generate thumbnail with more reliable method
-                        thumbnail_path = f"{os.path.splitext(output_filename)[0]}.jpg"
-                        extract_thumbnail(final_video_path, thumbnail_path)
-
-                        # Create explicit, absolute URLs that will work in the browser
-                        video_basename = os.path.basename(final_video_path)
+                        # Generate thumbnail
+                        thumbnail_path = output_filename.replace(".mp4", ".jpg")
+                        extract_thumbnail(output_filename, thumbnail_path)
+                        
+                        # Use direct paths to the files
+                        video_basename = os.path.basename(output_filename)
                         thumbnail_basename = os.path.basename(thumbnail_path)
-
-                        # Use absolute URLs to avoid any path resolution issues
-                        video_url = f"{request.url_root.rstrip('/')}/video/{video_basename}"
-                        thumbnail_url = f"{request.url_root.rstrip('/')}/thumbnail/{thumbnail_basename}"
-
-                        # Logging for debugging
-                        logger.info(f"Created video URL: {video_url}")
-                        logger.info(f"Created thumbnail URL: {thumbnail_url}")
-
+                        
+                        # Use direct paths to the files
+                        video_url = f"/shorts_output/{video_basename}"
+                        thumbnail_url = f"/shorts_output/{thumbnail_basename}"
+                        
                         # Add to videos list
                         new_video = {
                             "id": f"short-{i+1}",
@@ -504,6 +432,7 @@ def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, fon
                         }
                         
                         processing_jobs[job_id]["videos"].append(new_video)
+                        logger.info(f"Added video to job results: {video_url}")
                     else:
                         logger.error(f"Failed to add subtitles to segment {i+1}")
                 else:
@@ -571,6 +500,12 @@ def serve_video_file(filename):
 def serve_thumbnail_file(filename):
     directory = os.path.abspath("shorts_output")
     return send_file(os.path.join(directory, filename), mimetype='image/jpeg')
+
+# Use a simple static file serving approach
+@app.route('/shorts_output/<path:filename>')
+def serve_static_file(filename):
+    """Serve files directly from the shorts_output directory"""
+    return send_from_directory('shorts_output', filename)
 
 if __name__ == '__main__':
     port = 8080
