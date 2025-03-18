@@ -1,4 +1,3 @@
-
 // Mock implementation for video processing and upload
 // In a real application, this would connect to your backend service
 
@@ -7,23 +6,60 @@
  * @param youtubeLink The YouTube video URL to process
  * @returns Promise that resolves when processing is complete
  */
-export const processYoutubeLink = async (youtubeLink: string): Promise<boolean> => {
-  // This is a mock implementation
+export const processYoutubeLink = async (youtubeLink: string): Promise<any> => {
   console.log(`Processing YouTube link: ${youtubeLink}`);
-  
-  // Simulate API call with delay
-  return new Promise((resolve, reject) => {
-    setTimeout(() => {
-      // Randomly succeed or fail for demo purposes
-      const success = Math.random() > 0.2; // 80% success rate
-      
-      if (success) {
-        resolve(true);
-      } else {
-        reject(new Error('Failed to process YouTube video. Please try again.'));
-      }
-    }, 3000); // Simulate 3 second processing time
-  });
+
+  try {
+    // Send request to your backend
+    const response = await fetch('/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        youtubeUrl: youtubeLink,
+        aspectRatio: '9:16',
+        wordsPerSubtitle: 2,
+        fontSize: 36
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('Error processing YouTube link:', errorData);
+      throw new Error(errorData.error || 'Failed to process YouTube video');
+    }
+
+    const data = await response.json();
+    console.log('Processing started:', data);
+
+    // Return the job ID for status polling
+    return {
+      jobId: data.jobId,
+      status: 'processing'
+    };
+  } catch (error) {
+    console.error('Error calling backend:', error);
+    throw error;
+  }
+};
+
+/**
+ * Poll for job status
+ * @param jobId The job ID to check
+ * @returns Promise that resolves to the current job status
+ */
+export const getJobStatus = async (jobId: string): Promise<any> => {
+  try {
+    const response = await fetch(`/status/${jobId}`);
+    if (!response.ok) {
+      throw new Error('Failed to get job status');
+    }
+    return response.json();
+  } catch (error) {
+    console.error('Error checking job status:', error);
+    throw error;
+  }
 };
 
 /**
@@ -33,29 +69,29 @@ export const processYoutubeLink = async (youtubeLink: string): Promise<boolean> 
  * @returns Promise that resolves when upload and processing is complete
  */
 export const uploadVideoFile = async (
-  file: File, 
+  file: File,
   onProgress: (progress: number) => void
 ): Promise<boolean> => {
   // This is a mock implementation
   console.log(`Uploading file: ${file.name} (${file.size} bytes)`);
-  
+
   // Simulate upload with progress updates
   return new Promise((resolve, reject) => {
     let progress = 0;
     const totalSteps = 20;
-    
+
     const interval = setInterval(() => {
       progress += 5;
       onProgress(progress);
-      
+
       if (progress >= 100) {
         clearInterval(interval);
-        
+
         // Simulate processing delay after upload completes
         setTimeout(() => {
           // Randomly succeed or fail for demo purposes
           const success = Math.random() > 0.2; // 80% success rate
-          
+
           if (success) {
             resolve(true);
           } else {
