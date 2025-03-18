@@ -1,13 +1,14 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from youtube_utils import get_video_id, fetch_transcript, download_video
+from youtube_utils import get_video_id, fetch_transcript, download_video_segment
 from ai_extractor import extract_important_parts
-from video_processor import process_segment
+from video_processor import process_segment, create_word_by_word_subtitle_file, track_face_and_crop_mediapipe, extract_thumbnail
 import os
 import json
 import uuid
 import threading
 import logging
+import shutil
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, 
@@ -236,110 +237,139 @@ def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, fon
         # Create output directory if it doesn't exist
         output_dir = "shorts_output"
         os.makedirs(output_dir, exist_ok=True)
-        logger.info(f"Using output directory: {output_dir}")
         
-        # Update status
+        # Initialize videos array in the job status
+        processing_jobs[job_id]["videos"] = []
         processing_jobs[job_id]["message"] = "Extracting video ID"
         processing_jobs[job_id]["progress"] = 5
-        logger.info("Extracting video ID")
         
         # Get video ID
         video_id = get_video_id(youtube_url)
         if not video_id:
-            logger.error(f"Invalid YouTube URL: {youtube_url}")
             processing_jobs[job_id]["status"] = "error"
             processing_jobs[job_id]["message"] = "Invalid YouTube URL"
             return
             
-        logger.info(f"Extracted video ID: {video_id}")
-        
         # Update status
         processing_jobs[job_id]["message"] = "Fetching transcript"
         processing_jobs[job_id]["progress"] = 10
-        logger.info("Fetching transcript")
         
         # Get transcript
         transcript = fetch_transcript(video_id)
         if not transcript:
-            logger.error(f"Could not retrieve transcript for video ID: {video_id}")
             processing_jobs[job_id]["status"] = "error"
             processing_jobs[job_id]["message"] = "Could not retrieve transcript"
             return
             
-        logger.info(f"Transcript retrieved with {len(transcript)} entries")
-        
         # Update status
         processing_jobs[job_id]["message"] = "Analyzing transcript to find engaging segments"
         processing_jobs[job_id]["progress"] = 20
-        logger.info("Analyzing transcript for engaging segments")
         
         # Extract important segments
         segments = extract_important_parts(transcript)
         processing_jobs[job_id]["segments"] = segments
-        logger.info(f"Found {len(segments)} engaging segments")
         
-        # Update status
-        processing_jobs[job_id]["message"] = "Downloading video from YouTube"
-        processing_jobs[job_id]["progress"] = 30
-        logger.info("Downloading video from YouTube")
-        
-        # Download video
-        video_path = download_video(youtube_url)
-        if not video_path:
-            logger.error(f"Failed to download video from URL: {youtube_url}")
-            processing_jobs[job_id]["status"] = "error"
-            processing_jobs[job_id]["message"] = "Failed to download video"
-            return
-            
-        logger.info(f"Video downloaded to: {video_path}")
-        
-        # Process each segment
-        shorts_paths = []
+        # Process each segment individually
         for i, segment in enumerate(segments):
-            # Update status for this segment
-            processing_jobs[job_id]["message"] = f"Processing segment {i+1}/{len(segments)}"
-            processing_jobs[job_id]["progress"] = 30 + (i * 70 // len(segments))
-            logger.info(f"Processing segment {i+1}/{len(segments)}")
+            start_time = float(segment.get('start_time', 0))
+            end_time = float(segment.get('end_time', start_time + 30))
             
+            # Update status for this segment
+            processing_jobs[job_id]["message"] = f"Downloading segment {i+1}/{len(segments)}"
+            processing_jobs[job_id]["progress"] = 30 + (i * 15 // len(segments))
+            
+            # Download just this segment
+            segment_video = download_video_segment(
+                youtube_url, 
+                start_time, 
+                end_time, 
+                segment_id=i+1, 
+                total_segments=len(segments)
+            )
+            
+            if not segment_video:
+                logger.error(f"Failed to download segment {i+1}")
+                continue
+                
             # Generate unique filename with job ID prefix
             output_filename = f"{output_dir}/{job_id}_short_{i+1}.mp4"
-            logger.info(f"Output will be saved to: {output_filename}")
+            
+            # Update status for processing
+            processing_jobs[job_id]["message"] = f"Processing segment {i+1}/{len(segments)}"
+            processing_jobs[job_id]["progress"] = 45 + (i * 55 // len(segments))
             
             # Process the segment
             try:
-                success = process_segment(
-                    video_path=video_path,
-                    segment=segment,
+                # Create subtitle file for this segment
+                temp_dir = f"temp_{os.path.basename(output_filename).split('.')[0]}"
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                subtitle_file = f"{temp_dir}/subtitles.srt"
+                create_word_by_word_subtitle_file(
                     transcript_data=transcript,
-                    aspect_ratio=aspect_ratio,
-                    output_path=output_filename,
-                    font_size=font_size,
+                    start_time=start_time,
+                    end_time=end_time,
+                    output_file=subtitle_file,
                     words_per_subtitle=words_per_subtitle
                 )
                 
-                if success:
-                    logger.info(f"Successfully processed segment {i+1}")
-                    # Build path that can be accessed from frontend
-                    video_url = f"/shorts/{job_id}_short_{i+1}.mp4"
-                    shorts_paths.append({
-                        "id": f"short-{i+1}",
-                        "title": f"Short {i+1}: {segment.get('reason', 'Engaging clip')}",
-                        "url": video_url,
-                        "thumbnailUrl": video_url.replace(".mp4", ".jpg"),  # You'll need to generate thumbnails
-                        "duration": f"{int(segment.get('end_time', 0) - segment.get('start_time', 0))}s",
-                        "segment": segment
-                    })
+                # Process with face tracking
+                tracked_segment = f"{temp_dir}/tracked_segment.mp4"
+                logger.info(f"Applying face tracking to segment {i+1}...")
+                
+                if track_face_and_crop_mediapipe(segment_video, tracked_segment, aspect_ratio, segment_id=i+1, total_segments=len(segments)):
+                    # Add subtitles
+                    logger.info(f"Adding subtitles to segment {i+1}...")
+                    
+                    from video_processor import add_subtitles
+                    success = add_subtitles(tracked_segment, subtitle_file, output_filename, font_size)
+                    
+                    # Generate thumbnail
+                    if success:
+                        thumbnail_path = output_filename.replace(".mp4", ".jpg")
+                        extract_thumbnail(output_filename, thumbnail_path)
+                        
+                        # Build path that can be accessed from frontend
+                        video_url = f"/shorts/{job_id}_short_{i+1}.mp4"
+                        thumbnail_url = f"/shorts/{job_id}_short_{i+1}.jpg"
+                        
+                        # Add to videos list
+                        new_video = {
+                            "id": f"short-{i+1}",
+                            "title": f"Short {i+1}: {segment.get('reason', 'Engaging clip')}",
+                            "url": video_url,
+                            "thumbnailUrl": thumbnail_url,
+                            "filePath": output_filename,  # For debugging
+                            "duration": f"{int(end_time - start_time)}s",
+                            "segment": segment
+                        }
+                        
+                        processing_jobs[job_id]["videos"].append(new_video)
+                        logger.info(f"Segment {i+1} ready for viewing")
                 else:
-                    logger.error(f"Failed to process segment {i+1}")
+                    logger.error(f"Failed face tracking for segment {i+1}")
             except Exception as e:
                 logger.exception(f"Error processing segment {i+1}: {str(e)}")
+            finally:
+                # Clean up temporary files
+                try:
+                    if os.path.exists(segment_video):
+                        os.remove(segment_video)
+                    
+                    if os.path.exists(temp_dir):
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception as cleanup_error:
+                    logger.error(f"Error cleaning up temporary files: {cleanup_error}")
         
         # Update final status
-        processing_jobs[job_id]["status"] = "completed"
-        processing_jobs[job_id]["message"] = "All shorts have been created successfully"
+        if len(processing_jobs[job_id]["videos"]) > 0:
+            processing_jobs[job_id]["status"] = "completed"
+            processing_jobs[job_id]["message"] = "All shorts have been created successfully"
+        else:
+            processing_jobs[job_id]["status"] = "error"
+            processing_jobs[job_id]["message"] = "Failed to create any shorts"
+            
         processing_jobs[job_id]["progress"] = 100
-        processing_jobs[job_id]["videos"] = shorts_paths
-        logger.info(f"Job {job_id} completed successfully with {len(shorts_paths)} shorts")
         
     except Exception as e:
         logger.exception(f"Error processing video job {job_id}: {str(e)}")
