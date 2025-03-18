@@ -5,19 +5,19 @@ import os
 import subprocess
 
 
-def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
+def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16", segment_id=1, total_segments=1):
     """Track faces using MediaPipe with improved smoothing for stable tracking"""
-    print(f"Processing segment with improved face tracking: {input_file}")
+    print(
+        f"[Segment {segment_id}/{total_segments}] Processing face tracking...")
 
-    # Initialize MediaPipe Face Detection
     mp_face_detection = mp.solutions.face_detection
     face_detection = mp_face_detection.FaceDetection(
         min_detection_confidence=0.5)
 
-    # Open the video
     cap = cv2.VideoCapture(input_file)
     if not cap.isOpened():
-        print(f"Error: Could not open video {input_file}")
+        print(
+            f"[Segment {segment_id}] Error: Could not open video {input_file}")
         return False
 
     # Get video properties
@@ -26,7 +26,7 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
     fps = cap.get(cv2.CAP_PROP_FPS)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # Calculate target dimensions based on aspect ratio
+    # Calculate target dimensions
     if aspect_ratio == "9:16":
         target_width = height * 9 // 16
         target_height = height
@@ -47,19 +47,19 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
         elif aspect_ratio == "4:5":
             target_height = width * 5 // 4
 
-    # Setup temporary video file (without audio)
-    temp_video = "temp_tracked_video.mp4"
+    # Setup temporary video file
+    temp_video = f"temp_tracked_video_{segment_id}.mp4"
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(temp_video, fourcc, fps,
                           (target_width, target_height))
 
     # Initialize smooth tracking with a longer history window for even smoother movement
-    # Increased history length for smoother motion
-    position_history_x = collections.deque(maxlen=45)
-    position_history_y = collections.deque(maxlen=45)
+    history_size = 60  # Increased history for ultra-smooth motion
+    position_history_x = collections.deque(maxlen=history_size)
+    position_history_y = collections.deque(maxlen=history_size)
 
     # Fill position history with initial center
-    for _ in range(45):
+    for _ in range(history_size):
         position_history_x.append(width // 2)
         position_history_y.append(height // 2)
 
@@ -71,9 +71,10 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
             break
 
         frame_number += 1
-        if frame_number % (fps * 5) == 0:  # Status update every 5 seconds
+        # Status update every 5 seconds
+        if frame_number % (fps * 5) == 0 or frame_number == 1:
             print(
-                f"Processing frame {frame_number}/{frame_count} ({frame_number/frame_count*100:.1f}%)")
+                f"[Segment {segment_id}] Processing frame {frame_number}/{frame_count} ({frame_number/frame_count*100:.1f}%)")
 
         # Convert frame color for MediaPipe
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -102,15 +103,18 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
             position_history_x.append(face_x_center)
             position_history_y.append(face_y_center)
 
-        # Calculate smooth position using weighted average
-        # This gives more weight to recent positions but still maintains smoothness
-        weights = list(range(1, len(position_history_x) + 1))
-        total_weight = sum(weights)
+        # Calculate smooth position using exponential moving average
+        alpha = 0.05  # Low alpha for ultra-smooth movement
+        x_center = position_history_x[-1]
+        y_center = position_history_y[-1]
 
-        x_center = int(
-            sum(x * w for x, w in zip(position_history_x, weights)) / total_weight)
-        y_center = int(
-            sum(y * w for y, w in zip(position_history_y, weights)) / total_weight)
+        # Apply smoothing based on history
+        for i in range(len(position_history_x)-2, -1, -1):
+            x_center = alpha * position_history_x[i] + (1 - alpha) * x_center
+            y_center = alpha * position_history_y[i] + (1 - alpha) * y_center
+
+        x_center = int(x_center)
+        y_center = int(y_center)
 
         # Calculate crop region (center on smoothed face position)
         x_start = max(0, min(x_center - target_width //
@@ -124,7 +128,7 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
                                   target_height, x_start:x_start + target_width]
             out.write(cropped_frame)
         except Exception as e:
-            print(f"Error cropping frame: {e}")
+            print(f"[Segment {segment_id}] Error cropping frame: {e}")
             # Fallback to center crop
             x_start = (width - target_width) // 2
             y_start = (height - target_height) // 2
@@ -138,7 +142,8 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
     face_detection.close()
 
     # Now combine the video with the original audio using ffmpeg
-    print("Merging tracked video with original audio...")
+    print(
+        f"[Segment {segment_id}] Merging tracked video with original audio...")
     cmd = [
         'ffmpeg', '-y',
         '-i', temp_video,
@@ -158,5 +163,5 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
     if os.path.exists(temp_video):
         os.remove(temp_video)
 
-    print(f"Face tracking with audio completed: {output_file}")
+    print(f"[Segment {segment_id}] Face tracking with audio completed")
     return True
