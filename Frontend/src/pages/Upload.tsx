@@ -7,21 +7,52 @@ import ProcessingProgress from "@/components/ProcessingProgress";
 
 const Upload = () => {
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isProcessed, setIsProcessed] = useState(false);
   const [processMessage, setProcessMessage] = useState("");
   const [shorts, setShorts] = useState<any[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [currentStage, setCurrentStage] = useState("");
-  const [pollInterval, setPollInterval] = useState<NodeJS.Timeout | null>(null);
 
-  // This effect handles cleanup of the polling interval
+  // Poll for job status and update shorts as they become available
   useEffect(() => {
-    return () => {
-      if (pollInterval) {
-        clearInterval(pollInterval);
+    if (!jobId || !isProcessing) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`/status/${jobId}`);
+        if (!response.ok) throw new Error("Failed to get status");
+
+        const data = await response.json();
+        console.log("Status update:", data);
+
+        // Update progress and message
+        if (data.progress) setProgress(data.progress);
+        if (data.message) setCurrentStage(data.message);
+
+        // Check if any videos are available
+        if (data.videos && data.videos.length > 0) {
+          // Update shorts with available videos
+          setShorts(data.videos);
+        }
+
+        // Check if processing is complete
+        if (data.status === "completed") {
+          setIsProcessing(false);
+          setIsProcessed(true);
+          clearInterval(interval);
+        } else if (data.status === "error") {
+          setIsProcessing(false);
+          setProcessMessage(data.message || "An error occurred");
+          clearInterval(interval);
+        }
+      } catch (error) {
+        console.error("Error polling for status:", error);
       }
-    };
-  }, [pollInterval]);
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [jobId, isProcessing]);
 
   const handleUploadComplete = (
     success: boolean,
@@ -29,68 +60,14 @@ const Upload = () => {
     data?: any[]
   ) => {
     if (success && data && data.length > 0 && data[0].jobId) {
-      // Set the job ID and start polling
+      // This is the initial job start response
       setJobId(data[0].jobId);
       setProcessMessage("Processing started");
       setIsProcessing(true);
-
-      // Start polling immediately
-      startPolling(data[0].jobId);
     } else {
+      // This is an error or a regular update
       setProcessMessage(message);
     }
-  };
-
-  // Polling function to check for job status and new videos
-  const startPolling = (id: string) => {
-    // Clear any existing interval
-    if (pollInterval) {
-      clearInterval(pollInterval);
-    }
-
-    // Start a new polling interval
-    const interval = setInterval(async () => {
-      try {
-        const response = await fetch(`/status/${id}`);
-        if (!response.ok) {
-          throw new Error(`Error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        console.log("Status update:", data);
-
-        // Update progress and stage
-        if (data.progress !== undefined) {
-          setProgress(data.progress);
-        }
-
-        if (data.message) {
-          setCurrentStage(data.message);
-        }
-
-        // Check if new videos are available
-        if (data.videos && data.videos.length > 0) {
-          // Update shorts with current videos
-          setShorts(data.videos);
-        }
-
-        // Check if processing is complete
-        if (data.status === "completed") {
-          setIsProcessing(false);
-          clearInterval(interval);
-          setPollInterval(null);
-        } else if (data.status === "error") {
-          setIsProcessing(false);
-          setProcessMessage(data.message || "An error occurred");
-          clearInterval(interval);
-          setPollInterval(null);
-        }
-      } catch (error) {
-        console.error("Error polling for status:", error);
-      }
-    }, 1000); // Poll every second for quick updates
-
-    setPollInterval(interval);
   };
 
   return (
@@ -124,7 +101,7 @@ const Upload = () => {
 
           {/* Show shorts as they become available - even during processing */}
           {shorts.length > 0 && (
-            <div className="mt-12 animate-in fade-in duration-500">
+            <div className="mt-16">
               <div className="mb-4 flex items-center">
                 <h2 className="text-xl font-semibold text-ai-blue">
                   Generated Shorts
@@ -135,20 +112,16 @@ const Upload = () => {
                   </span>
                 )}
               </div>
-              <VideoShorts shorts={shorts} isProcessing={isProcessing} />
+              <VideoShorts shorts={shorts} />
             </div>
           )}
 
           {/* Show message when no shorts are available yet */}
           {isProcessing && shorts.length === 0 && progress > 30 && (
             <div className="mt-8 p-4 bg-ai-light/30 rounded-lg border border-ai-lighter">
-              <div className="flex items-center justify-center">
-                <div className="animate-spin h-5 w-5 mr-3 border-2 border-ai-accent border-t-transparent rounded-full"></div>
-                <p className="text-ai-muted">
-                  Processing segments - shorts will appear here as they're
-                  ready...
-                </p>
-              </div>
+              <p className="text-ai-muted text-center">
+                Shorts will appear here as soon as they're processed...
+              </p>
             </div>
           )}
         </div>

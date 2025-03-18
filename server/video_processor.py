@@ -29,22 +29,39 @@ def extract_segment(video_path, start_time, end_time, output_path):
         return False
 
 
-def add_subtitles(video_path, subtitle_path, output_path, font_size=12):
-    """Add subtitles to video with specific styling."""
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', video_path,
-        '-vf', f"subtitles={subtitle_path}:force_style='FontName=Arial,FontSize={font_size},PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=1,Outline=2,Shadow=0,Alignment=2'",
-        '-c:a', 'copy',  # Copy audio stream without re-encoding
-        '-vsync', 'cfr',  # Constant frame rate for better A/V sync
-        output_path
-    ]
-
+def add_subtitles(input_video, subtitle_file, output_video, font_size=24):
+    """Add subtitles to video with improved encoding for browser compatibility."""
     try:
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(output_video), exist_ok=True)
+        
+        # Use a higher bitrate and web-optimized format
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', input_video,
+            '-vf', f'subtitles={subtitle_file}:force_style=\'FontSize={font_size},BorderStyle=4,Outline=1,Shadow=0,Alignment=2,Bold=1\'',
+            '-c:v', 'libx264',
+            '-preset', 'fast',  # Balance between speed and quality
+            '-crf', '23',       # Good quality, not too large
+            '-c:a', 'aac',
+            '-b:a', '128k',
+            '-pix_fmt', 'yuv420p',  # Required for browser compatibility
+            '-movflags', '+faststart',  # Web optimization
+            output_video
+        ]
+        
+        # Execute command
         subprocess.run(cmd, check=True)
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Error adding subtitles: {e}")
+        
+        # Verify the output file
+        if os.path.exists(output_video) and os.path.getsize(output_video) > 10000:
+            logger.info(f"Successfully added subtitles to video: {output_video}")
+            return True
+        else:
+            logger.error(f"Failed to create valid output file: {output_video}")
+            return False
+    except Exception as e:
+        logger.exception(f"Error adding subtitles: {str(e)}")
         return False
 
 

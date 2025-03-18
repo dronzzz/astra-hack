@@ -293,6 +293,55 @@ def upload_file():
         "hasData": bool(request.data)
     }}), 400
 
+def is_valid_mp4(file_path):
+    """Check if the MP4 file is valid and playable."""
+    try:
+        # Use ffprobe to check file validity
+        cmd = [
+            'ffprobe', 
+            '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=codec_name,width,height',
+            '-of', 'json',
+            file_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        
+        # Parse the JSON output
+        if result.returncode == 0 and "codec_name" in result.stdout:
+            return True
+        
+        return False
+    except Exception as e:
+        logger.error(f"Error validating MP4: {str(e)}")
+        return False
+
+def extract_thumbnail(video_path, output_path):
+    """Generate a thumbnail from a video file using ffmpeg."""
+    try:
+        # Make sure we capture a frame at 1 second to avoid black frames
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', video_path,
+            '-ss', '00:00:01',  # Take frame at 1 second
+            '-frames:v', '1',
+            '-q:v', '2',       # High quality
+            '-vf', 'scale=640:-1',  # Resize to reasonable width
+            output_path
+        ]
+        subprocess.run(cmd, check=True)
+        
+        # Verify thumbnail was created
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+            logger.info(f"Generated thumbnail: {output_path}")
+            return True
+        else:
+            logger.error(f"Failed to generate valid thumbnail: {output_path}")
+            return False
+    except Exception as e:
+        logger.error(f"Error generating thumbnail: {str(e)}")
+        return False
+
 def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, font_size):
     logger.info(f"Starting video processing job: {job_id}")
     try:
@@ -385,36 +434,78 @@ def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, fon
                     
                     success = add_subtitles(tracked_segment, subtitle_file, output_filename, font_size)
                     
-                    # Generate thumbnail
                     if success:
-                        extract_thumbnail(output_filename, thumbnail_path)
+                        logger.info(f"Successfully processed segment {i+1}")
+                        # Extra step to ensure video is web-compatible
+                        def ensure_web_compatible_video(input_file, output_file=None):
+                            """Ensure video is encoded in a web-compatible format."""
+                            if output_file is None:
+                                output_file = f"{os.path.splitext(input_file)[0]}_web.mp4"
+                            
+                            try:
+                                cmd = [
+                                    'ffmpeg', '-y',
+                                    '-i', input_file,
+                                    '-c:v', 'libx264',
+                                    '-profile:v', 'main',
+                                    '-preset', 'fast',
+                                    '-crf', '23',
+                                    '-movflags', '+faststart',
+                                    '-pix_fmt', 'yuv420p',
+                                    '-c:a', 'aac',
+                                    '-b:a', '128k',
+                                    output_file
+                                ]
+                                subprocess.run(cmd, check=True)
+                                
+                                if os.path.exists(output_file) and os.path.getsize(output_file) > 10000:
+                                    return output_file
+                                return None
+                            except Exception as e:
+                                logger.error(f"Error making video web compatible: {str(e)}")
+                                return None
+
+                        # After processing each segment and creating output_filename
+                        final_video_path = output_filename
+                        web_compatible_path = ensure_web_compatible_video(output_filename)
+                        if web_compatible_path:
+                            final_video_path = web_compatible_path
+                            # If we created a new file, rename it to the original
+                            if web_compatible_path != output_filename:
+                                try:
+                                    os.replace(web_compatible_path, output_filename)
+                                    final_video_path = output_filename
+                                except Exception as e:
+                                    logger.error(f"Error replacing video with web compatible version: {str(e)}")
+
+                        # Generate thumbnail with more reliable method
+                        thumbnail_path = f"{os.path.splitext(output_filename)[0]}.jpg"
+                        extract_thumbnail(final_video_path, thumbnail_path)
+
+                        # Create explicit, absolute URLs that will work in the browser
+                        video_basename = os.path.basename(final_video_path)
+                        thumbnail_basename = os.path.basename(thumbnail_path)
+
+                        # Use absolute URLs to avoid any path resolution issues
+                        video_url = f"{request.url_root.rstrip('/')}/video/{video_basename}"
+                        thumbnail_url = f"{request.url_root.rstrip('/')}/thumbnail/{thumbnail_basename}"
+
+                        # Logging for debugging
+                        logger.info(f"Created video URL: {video_url}")
+                        logger.info(f"Created thumbnail URL: {thumbnail_url}")
+
+                        # Add to videos list
+                        new_video = {
+                            "id": f"short-{i+1}",
+                            "title": f"Short {i+1}: {segment.get('reason', 'Engaging clip')}",
+                            "url": video_url,
+                            "thumbnailUrl": thumbnail_url,
+                            "duration": f"{int(end_time - start_time)}s"
+                        }
                         
-                        # Check if the video file exists and is valid before adding to list
-                        if os.path.exists(output_filename) and os.path.getsize(output_filename) > 10000:  # Ensure file is at least 10KB
-                            # Log file info
-                            logger.info(f"Video file created: {output_filename}, size: {os.path.getsize(output_filename)} bytes")
-                            
-                            # Create a simple direct URL to the file
-                            video_basename = os.path.basename(output_filename)
-                            thumbnail_basename = os.path.basename(thumbnail_path)
-                            
-                            # SIMPLIFIED: Use direct file URLs
-                            video_url = f"/video/{video_basename}"
-                            thumbnail_url = f"/thumbnail/{thumbnail_basename}"
-                            
-                            # Add to videos list with explicit paths
-                            new_video = {
-                                "id": f"short-{i+1}",
-                                "title": f"Short {i+1}: {segment.get('reason', 'Engaging clip')}",
-                                "url": video_url,
-                                "thumbnailUrl": thumbnail_url,
-                                "duration": f"{int(end_time - start_time)}s"
-                            }
-                            
-                            processing_jobs[job_id]["videos"].append(new_video)
-                            logger.info(f"Added video to job results: {video_url}")
-                        else:
-                            logger.error(f"Video file missing or invalid: {output_filename}")
+                        processing_jobs[job_id]["videos"].append(new_video)
+                    else:
+                        logger.error(f"Failed to add subtitles to segment {i+1}")
                 else:
                     logger.error(f"Failed face tracking for segment {i+1}")
             except Exception as e:
@@ -454,7 +545,26 @@ def test_api():
 @app.route('/video/<filename>')
 def serve_video_file(filename):
     directory = os.path.abspath("shorts_output")
-    return send_file(os.path.join(directory, filename), mimetype='video/mp4')
+    file_path = os.path.join(directory, filename)
+    
+    # Check if file exists and is valid
+    if not os.path.exists(file_path) or os.path.getsize(file_path) < 1000:
+        return jsonify({"error": "Video file is missing or invalid"}), 404
+    
+    # For video files, we need to use byte-range requests
+    # This enables proper seeking in the video player
+    response = send_file(
+        file_path,
+        mimetype='video/mp4',
+        as_attachment=False,
+        conditional=True  # Enable partial content responses
+    )
+    
+    # Add necessary headers for video streaming
+    response.headers['Accept-Ranges'] = 'bytes'
+    response.headers['Content-Disposition'] = f'inline; filename="{filename}"'
+    
+    return response
 
 # Simple route for thumbnail files  
 @app.route('/thumbnail/<filename>')
@@ -463,4 +573,6 @@ def serve_thumbnail_file(filename):
     return send_file(os.path.join(directory, filename), mimetype='image/jpeg')
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    port = 8080
+    logger.info(f"Starting server on http://localhost:{port}")
+    app.run(debug=True, host='0.0.0.0', port=port)
