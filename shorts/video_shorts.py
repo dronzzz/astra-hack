@@ -6,6 +6,7 @@ import os
 import subprocess
 import cv2
 import numpy as np
+import mediapipe as mp
 from datetime import datetime, timedelta
 
 
@@ -296,58 +297,161 @@ def apply_aspect_ratio(input_file, output_file, aspect_ratio):
     return output_file
 
 
-def track_face_and_crop(input_file, output_file, aspect_ratio="9:16"):
+def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
+    """Track faces using MediaPipe (much faster than OpenCV) and crop video to follow faces"""
+    print(f"Processing segment with face tracking: {input_file}")
+
+    # Initialize MediaPipe Face Detection
+    mp_face_detection = mp.solutions.face_detection
+    face_detection = mp_face_detection.FaceDetection(
+        min_detection_confidence=0.5)
+
+    # Open the video
     cap = cv2.VideoCapture(input_file)
+    if not cap.isOpened():
+        print(f"Error: Could not open video {input_file}")
+        return False
+
+    # Get video properties
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
+    # Calculate target dimensions based on aspect ratio
     if aspect_ratio == "9:16":
-        new_width = height * 9 // 16
-        new_height = height
-    else:
-        new_width = width
-        new_height = height
+        target_width = height * 9 // 16
+        target_height = height
+    elif aspect_ratio == "1:1":
+        target_width = min(width, height)
+        target_height = min(width, height)
+    elif aspect_ratio == "4:5":
+        target_width = height * 4 // 5
+        target_height = height
+    else:  # Default to 16:9
+        target_width = width
+        target_height = width * 9 // 16
 
-    x_offset = (width - new_width) // 2
-    y_offset = (height - new_height) // 2
+    if target_width > width:
+        # If calculated width exceeds available width, adjust dimensions
+        target_width = width
+        if aspect_ratio == "9:16":
+            target_height = width * 16 // 9
+        elif aspect_ratio == "4:5":
+            target_height = width * 5 // 4
 
+    # Setup video writer
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_file, fourcc, fps, (new_width, new_height))
+    out = cv2.VideoWriter(output_file, fourcc, fps,
+                          (target_width, target_height))
 
-    face_cascade = cv2.CascadeClassifier(
-        cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    # Variables to smooth motion
+    last_x_center = width // 2
+    last_y_center = height // 2
+    smoothing_factor = 0.8  # Higher values = smoother but slower to follow
 
+    # Process frames
+    frame_number = 0
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+        frame_number += 1
+        if frame_number % (fps * 5) == 0:  # Status update every 5 seconds of video
+            print(
+                f"Processing frame {frame_number}/{frame_count} ({frame_number/frame_count*100:.1f}%)")
 
-        if len(faces) > 0:
-            (x, y, w, h) = faces[0]
-            x_offset = max(0, min(x + w//2 - new_width//2, width - new_width))
-            y_offset = max(
-                0, min(y + h//2 - new_height//2, height - new_height))
+        # Convert frame color for MediaPipe
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        cropped_frame = frame[y_offset:y_offset +
-                              new_height, x_offset:x_offset+new_width]
-        out.write(cropped_frame)
+        # Process with MediaPipe
+        results = face_detection.process(rgb_frame)
 
+        # Default crop center (center of frame)
+        x_center = width // 2
+        y_center = height // 2
+
+        # If faces detected, update crop center
+        if results.detections:
+            # Get the most prominent face (first detection)
+            detection = results.detections[0]
+
+            # Get bounding box
+            bbox = detection.location_data.relative_bounding_box
+
+            # Convert relative coordinates to absolute
+            x = int(bbox.xmin * width)
+            y = int(bbox.ymin * height)
+            w = int(bbox.width * width)
+            h = int(bbox.height * height)
+
+            # Calculate center of face
+            face_x_center = x + w // 2
+            face_y_center = y + h // 2
+
+            # Apply smoothing for camera movement
+            x_center = int(smoothing_factor * last_x_center +
+                           (1 - smoothing_factor) * face_x_center)
+            y_center = int(smoothing_factor * last_y_center +
+                           (1 - smoothing_factor) * face_y_center)
+
+            # Update for next frame
+            last_x_center = x_center
+            last_y_center = y_center
+        else:
+            # If no face detected, use previous position
+            x_center = last_x_center
+            y_center = last_y_center
+
+        # Calculate crop region (center on face)
+        x_start = max(0, min(x_center - target_width //
+                      2, width - target_width))
+        y_start = max(0, min(y_center - target_height //
+                      2, height - target_height))
+
+        # Crop the frame
+        try:
+            cropped_frame = frame[y_start:y_start +
+                                  target_height, x_start:x_start + target_width]
+            # Write the frame
+            out.write(cropped_frame)
+        except Exception as e:
+            print(f"Error cropping frame: {e}")
+            # Fallback to center crop if there's an issue
+            x_start = (width - target_width) // 2
+            y_start = (height - target_height) // 2
+            cropped_frame = frame[y_start:y_start +
+                                  target_height, x_start:x_start + target_width]
+            out.write(cropped_frame)
+
+    # Release resources
     cap.release()
     out.release()
+    face_detection.close()
+
+    print(f"Face tracking completed for segment: {output_file}")
+    return True
 
 
 def create_shorts_ffmpeg(video_path, segments, transcript_data, aspect_ratio="9:16", output_path="shorts.mp4"):
     """Create shorts video using ffmpeg with transcript overlay and custom aspect ratio"""
     try:
+        if not segments or len(segments) == 0:
+            print("No segments provided. Creating a default segment.")
+            segments = [{
+                "start_time": 0.0,
+                "end_time": 60.0,
+                "reason": "Default segment (first minute of video)"
+            }]
+
+        # Create temporary files for each segment
         temp_files = []
         final_temp_files = []
 
         for i, seg in enumerate(segments):
             try:
+                # Extract segment's start and end time
                 start = float(seg.get('start_time', 0))
                 end = float(seg.get('end_time', start + 30))
 
@@ -357,49 +461,62 @@ def create_shorts_ffmpeg(video_path, segments, transcript_data, aspect_ratio="9:
                     end = start + 30
 
                 duration = end - start
+                print(
+                    f"\nProcessing segment {i+1}/{len(segments)} - Duration: {duration:.2f}s")
 
+                # 1. Extract segment from full video (fast operation using ffmpeg)
                 raw_segment = f"temp_segment_raw_{i}.mp4"
+                print(f"Extracting segment {i+1} from full video...")
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', video_path,
                     '-ss', str(start),
                     '-t', str(duration),
-                    '-c', 'copy',
+                    '-c', 'copy',  # Copy without re-encoding for speed
                     raw_segment
                 ]
                 subprocess.run(cmd, check=True)
                 temp_files.append(raw_segment)
 
+                # 2. Create subtitle file for this specific segment
                 subtitle_file = f"subtitles_{i}.srt"
                 create_subtitle_file(
                     transcript_data, start, end, subtitle_file)
                 temp_files.append(subtitle_file)
 
-                aspect_segment = f"temp_segment_{i}.mp4"
-                track_face_and_crop(raw_segment, aspect_segment, aspect_ratio)
-                temp_files.append(aspect_segment)
+                # 3. Track faces and crop to desired aspect ratio
+                # This only processes the extracted segment, not the full video
+                face_tracked_segment = f"temp_segment_face_tracked_{i}.mp4"
+                track_face_and_crop_mediapipe(
+                    raw_segment, face_tracked_segment, aspect_ratio)
+                temp_files.append(face_tracked_segment)
 
+                # 4. Add subtitles to the face-tracked segment
+                final_segment = f"temp_segment_final_{i}.mp4"
+                print(f"Adding subtitles to segment {i+1}...")
                 cmd = [
                     'ffmpeg', '-y',
-                    '-i', aspect_segment,
+                    '-i', face_tracked_segment,
                     '-vf', f"subtitles={subtitle_file}:force_style='FontName=Arial,FontSize=30,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=1,Outline=2,Shadow=1,Alignment=2'",
                     '-c:a', 'copy',
-                    aspect_segment
+                    final_segment
                 ]
                 subprocess.run(cmd, check=True)
 
-                final_temp_files.append(aspect_segment)
-                temp_files.append(aspect_segment)
+                final_temp_files.append(final_segment)
+                temp_files.append(final_segment)
 
-                print(f"Processed segment {i+1}/{len(segments)}")
+                print(f"Completed processing segment {i+1}/{len(segments)}")
 
             except Exception as e:
                 print(f"Error processing segment {i+1}: {e}")
-                continue
+                continue  # Skip this segment and continue with others
 
         if not final_temp_files:
             raise ValueError("No segments were successfully processed")
 
+        # 5. Concatenate all processed segments
+        print("\nCombining all segments into final video...")
         with open('segments.txt', 'w') as f:
             for temp_file in final_temp_files:
                 f.write(f"file '{temp_file}'\n")
@@ -414,12 +531,14 @@ def create_shorts_ffmpeg(video_path, segments, transcript_data, aspect_ratio="9:
         ]
         subprocess.run(concat_cmd, check=True)
 
+        # Clean up temporary files
+        print("Cleaning up temporary files...")
         for temp_file in temp_files:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
         os.remove('segments.txt')
 
-        print(f"Shorts video saved to {output_path}")
+        print(f"Shorts video created successfully! Saved to: {output_path}")
     except Exception as e:
         print(f"Error creating Shorts video: {e}")
         print("Attempting to clean up temporary files...")
@@ -446,11 +565,27 @@ def main():
         print("Could not retrieve transcript.")
         return
 
+    print("Analyzing transcript to find engaging segments...")
     segments = extract_important_parts(transcript)
     print("Extracted segments:", json.dumps(segments, indent=2))
 
     # Choose aspect ratio
-    aspect_ratio = get_aspect_ratio_choice()
+    print("\nChoose an aspect ratio:")
+    print("1. 9:16 (Vertical - Best for Shorts/TikTok/Reels)")
+    print("2. 16:9 (Horizontal - Standard Widescreen)")
+    print("3. 1:1 (Square - Instagram)")
+    print("4. 4:5 (Vertical - Instagram)")
+    print("5. Keep original aspect ratio")
+
+    choice = input("Enter your choice (default: 1): ").strip()
+    aspect_ratios = {
+        "1": "9:16",
+        "2": "16:9",
+        "3": "1:1",
+        "4": "4:5",
+        "5": "original"
+    }
+    aspect_ratio = aspect_ratios.get(choice, "9:16")
     print(f"Using aspect ratio: {aspect_ratio}")
 
     # Custom output filename
@@ -461,11 +596,13 @@ def main():
     if not output_filename.endswith(".mp4"):
         output_filename += ".mp4"
 
+    print(f"\nDownloading video from YouTube...")
     video_path = download_video(youtube_url)
     if not video_path:
         print("Failed to download video.")
         return
 
+    print("\nBeginning video processing...")
     create_shorts_ffmpeg(video_path, segments, transcript,
                          aspect_ratio, output_filename)
 
