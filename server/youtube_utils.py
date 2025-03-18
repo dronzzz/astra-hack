@@ -54,18 +54,20 @@ def download_video_segment(youtube_url, start_time, end_time, segment_id=1, tota
             
             # Add 1-second padding before and after to ensure we get good keyframes
             padded_start = max(0, start_time - 1) 
-            padded_duration = min((end_time - start_time) + 2, info.get('duration') - padded_start)
+            padded_duration = min((end_time - start_time) + 2, info.get('duration', 0) - padded_start)
             
             # Download with ffmpeg using direct URL extraction
             formats = info.get('formats', [])
             
-            # Best video format
-            video_formats = [f for f in formats if f.get('vcodec') != 'none' and f.get('acodec') == 'none']
-            video_formats.sort(key=lambda x: x.get('height', 0), reverse=True)
+            # Best video format - filter out formats with None height
+            video_formats = [f for f in formats if f.get('vcodec') != 'none' and f.get('acodec') == 'none' and f.get('height') is not None]
+            # Sort by height, ensuring None values don't cause comparison errors
+            video_formats.sort(key=lambda x: x.get('height', 0) or 0, reverse=True)
             
             # Best audio format
             audio_formats = [f for f in formats if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
-            audio_formats.sort(key=lambda x: x.get('tbr', 0), reverse=True)
+            # Sort by bitrate, handling None values
+            audio_formats.sort(key=lambda x: x.get('tbr', 0) or 0, reverse=True)
             
             if video_formats and audio_formats:
                 video_url = video_formats[0]['url']
@@ -127,50 +129,91 @@ def download_video_segment(youtube_url, start_time, end_time, segment_id=1, tota
                 else:
                     raise Exception(f"Output file is missing or too small: {output_file}")
             else:
+                # If separate formats aren't available, try direct download
+                logger.info(f"[Segment {segment_id}] Separate video/audio formats not available, trying direct download...")
+                
+                # Find a combined format
+                combined_formats = [f for f in formats if f.get('vcodec') != 'none' and f.get('acodec') != 'none']
+                combined_formats.sort(key=lambda x: x.get('height', 0) or 0, reverse=True)
+                
+                if combined_formats:
+                    direct_url = combined_formats[0]['url']
+                    logger.info(f"[Segment {segment_id}] Using combined format: {combined_formats[0].get('format_id')} ({combined_formats[0].get('height')}p)")
+                    
+                    # Download segment directly with ffmpeg
+                    cmd = [
+                        'ffmpeg', '-y',
+                        '-ss', str(padded_start),
+                        '-i', direct_url,
+                        '-t', str(padded_duration),
+                        '-c:v', 'libx264',
+                        '-preset', 'fast',
+                        '-crf', '22',
+                        '-c:a', 'aac',
+                        '-b:a', '128k',
+                        output_file
+                    ]
+                    
+                    subprocess.run(cmd, check=True)
+                    
+                    if os.path.exists(output_file) and os.path.getsize(output_file) > 10000:
+                        # Extract precise segment
+                        precise_output = os.path.join(temp_dir, f"precise_segment_{segment_id}.mp4")
+                        precise_cmd = [
+                            'ffmpeg', '-y',
+                            '-i', output_file,
+                            '-ss', str(1),
+                            '-t', str(end_time - start_time),
+                            '-c:v', 'libx264',
+                            '-preset', 'medium',
+                            '-crf', '18',
+                            '-c:a', 'aac',
+                            '-b:a', '192k',
+                            precise_output
+                        ]
+                        
+                        subprocess.run(precise_cmd, check=True)
+                        shutil.move(precise_output, output_file)
+                        
+                        return output_file
+                
                 # Fallback: use yt-dlp's direct download with segment extraction
                 logger.info(f"[Segment {segment_id}] Falling back to yt-dlp direct download...")
+                
+                # Use method compatible with older versions
                 ydl_opts = {
                     'format': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best',
-                    'outtmpl': os.path.join(temp_dir, 'full_segment.mp4'),
+                    'outtmpl': os.path.join(temp_dir, 'full_video.%(ext)s'),
                     'quiet': True,
                     'no_warnings': True,
-                    'download_ranges': {
-                        'videos': [
-                            {
-                                'start_time': padded_start,
-                                'end_time': padded_start + padded_duration,
-                            }
-                        ],
-                    },
-                    'postprocessors': [{
-                        'key': 'FFmpegVideoRemuxer',
-                        'preferedformat': 'mp4',
-                    }],
                 }
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([youtube_url])
                 
-                # Use ffmpeg to extract exact segment
-                input_file = os.path.join(temp_dir, 'full_segment.mp4')
-                if os.path.exists(input_file):
-                    precise_cmd = [
-                        'ffmpeg', '-y',
-                        '-i', input_file,
-                        '-ss', str(1),  # Skip the first second of padding
-                        '-t', str(end_time - start_time),  # Exact duration
-                        '-c:v', 'libx264',
-                        '-preset', 'medium',
-                        '-crf', '18',
-                        '-c:a', 'aac',
-                        '-b:a', '192k',
-                        output_file
-                    ]
-                    
-                    subprocess.run(precise_cmd, check=True)
-                    
-                    if os.path.exists(output_file) and os.path.getsize(output_file) > 10000:
-                        return output_file
+                # Find the downloaded file
+                for file in os.listdir(temp_dir):
+                    if file.startswith('full_video.'):
+                        input_file = os.path.join(temp_dir, file)
+                        
+                        # Extract segment using ffmpeg
+                        segment_cmd = [
+                            'ffmpeg', '-y',
+                            '-ss', str(start_time),
+                            '-i', input_file,
+                            '-t', str(end_time - start_time),
+                            '-c:v', 'libx264',
+                            '-preset', 'medium',
+                            '-crf', '18',
+                            '-c:a', 'aac',
+                            '-b:a', '192k',
+                            output_file
+                        ]
+                        
+                        subprocess.run(segment_cmd, check=True)
+                        
+                        if os.path.exists(output_file) and os.path.getsize(output_file) > 10000:
+                            return output_file
         
         # If all methods fail, raise exception
         raise Exception("Failed to download segment using any method")

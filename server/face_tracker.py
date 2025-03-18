@@ -5,9 +5,9 @@ import os
 import subprocess
 
 
-def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
+def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16", segment_id=1, total_segments=1):
     """Track faces using MediaPipe with improved smoothing for stable tracking"""
-    print(f"Processing segment with improved face tracking: {input_file}")
+    print(f"[Segment {segment_id}/{total_segments}] Processing with face tracking: {input_file}")
 
     # Initialize MediaPipe Face Detection
     mp_face_detection = mp.solutions.face_detection
@@ -17,7 +17,7 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
     # Open the video
     cap = cv2.VideoCapture(input_file)
     if not cap.isOpened():
-        print(f"Error: Could not open video {input_file}")
+        print(f"[Segment {segment_id}] Error: Could not open video {input_file}")
         return False
 
     # Get video properties
@@ -47,8 +47,8 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
         elif aspect_ratio == "4:5":
             target_height = width * 5 // 4
 
-    # Setup temporary video file (without audio)
-    temp_video = "temp_tracked_video.mp4"
+    # Create a unique temp file for this segment
+    temp_video = f"temp_tracked_video_{segment_id}.mp4"
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(temp_video, fourcc, fps,
                           (target_width, target_height))
@@ -73,7 +73,7 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
         frame_number += 1
         if frame_number % (fps * 5) == 0:  # Status update every 5 seconds
             print(
-                f"Processing frame {frame_number}/{frame_count} ({frame_number/frame_count*100:.1f}%)")
+                f"[Segment {segment_id}] Processing frame {frame_number}/{frame_count} ({frame_number/frame_count*100:.1f}%)")
 
         # Convert frame color for MediaPipe
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -124,7 +124,7 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
                                   target_height, x_start:x_start + target_width]
             out.write(cropped_frame)
         except Exception as e:
-            print(f"Error cropping frame: {e}")
+            print(f"[Segment {segment_id}] Error cropping frame: {e}")
             # Fallback to center crop
             x_start = (width - target_width) // 2
             y_start = (height - target_height) // 2
@@ -138,15 +138,15 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
     face_detection.close()
 
     # Now combine the video with the original audio using ffmpeg
-    print("Merging tracked video with original audio...")
+    print(f"[Segment {segment_id}] Merging tracked video with original audio...")
     cmd = [
         'ffmpeg', '-y',
         '-i', temp_video,
         '-i', input_file,
-        '-c:v', 'libx264',  # Use libx264 for better compatibility
-        '-preset', 'medium',  # Balance between quality and speed
-        '-crf', '23',  # Quality setting (lower is better)
-        '-vsync', 'cfr',  # Constant frame rate for better sync
+        '-c:v', 'libx264',    # Use libx264 for better quality
+        '-preset', 'medium',  # Better quality preset
+        '-crf', '18',         # High quality (lower is better)
+        '-vsync', 'cfr',      # Constant frame rate for better sync
         '-map', '0:v:0',
         '-map', '1:a:0',
         '-shortest',
@@ -158,5 +158,5 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16"):
     if os.path.exists(temp_video):
         os.remove(temp_video)
 
-    print(f"Face tracking with audio completed: {output_file}")
+    print(f"[Segment {segment_id}] Face tracking with audio completed: {output_file}")
     return True

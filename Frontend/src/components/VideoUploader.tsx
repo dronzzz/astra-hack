@@ -74,7 +74,7 @@ const VideoUploader = ({
           youtubeUrl: youtubeLink,
           aspectRatio: "9:16",
           wordsPerSubtitle: 2,
-          fontSize: 36,
+          fontSize: 12,
         }),
       });
 

@@ -1,17 +1,20 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_cors import CORS
-from youtube_utils import get_video_id, fetch_transcript, download_video_segment
+from youtube_utils import get_video_id, fetch_transcript, download_video, download_video_segment
 from ai_extractor import extract_important_parts
-from video_processor import process_segment, create_word_by_word_subtitle_file, track_face_and_crop_mediapipe, extract_thumbnail
+from video_processor import process_segment, add_subtitles, extract_thumbnail
+from subtitle_generator import create_word_by_word_subtitle_file
+from face_tracker import track_face_and_crop_mediapipe
 import os
 import json
 import uuid
 import threading
 import logging
+import subprocess
 import shutil
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG, 
+logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('youtube-shorts')
 
@@ -24,8 +27,67 @@ processing_jobs = {}
 # Serve generated videos
 @app.route('/shorts/<filename>')
 def serve_video(filename):
-    logger.info(f"Serving video file: {filename}")
-    return send_from_directory('shorts_output', filename)
+    # Directory where videos are stored
+    directory = os.path.abspath("shorts_output")
+    file_path = os.path.join(directory, filename)
+    
+    # Enhanced logging
+    logger.info(f"Request for file: {filename}")
+    logger.info(f"Looking in directory: {directory}")
+    logger.info(f"Full path: {file_path}")
+    
+    if not os.path.exists(file_path):
+        logger.error(f"File not found: {file_path}")
+        # List directory contents to help debug
+        try:
+            dir_contents = os.listdir(directory)
+            logger.info(f"Directory contents: {dir_contents}")
+        except Exception as e:
+            logger.error(f"Could not list directory: {str(e)}")
+        return jsonify({"error": "File not found"}), 404
+    
+    # Log file details
+    logger.info(f"File exists, size: {os.path.getsize(file_path)} bytes")
+    
+    # Check if file is actually readable
+    try:
+        with open(file_path, 'rb') as f:
+            # Just read a small amount to verify file is accessible
+            _ = f.read(1024)
+    except Exception as e:
+        logger.error(f"File exists but cannot be read: {str(e)}")
+        return jsonify({"error": "File cannot be read"}), 500
+    
+    # Determine content type based on file extension
+    file_extension = os.path.splitext(filename)[1].lower()
+    
+    if file_extension == '.mp4':
+        content_type = 'video/mp4'
+    elif file_extension == '.jpg' or file_extension == '.jpeg':
+        content_type = 'image/jpeg'
+    elif file_extension == '.png':
+        content_type = 'image/png'
+    else:
+        content_type = 'application/octet-stream'
+    
+    # Use an improved method for serving potentially large files
+    try:
+        # For videos, use a streaming response with byte range support
+        if file_extension == '.mp4':
+            response = send_file(
+                file_path,
+                mimetype=content_type,
+                as_attachment=False,
+                conditional=True  # Enables partial content responses
+            )
+            response.headers['Accept-Ranges'] = 'bytes'
+            return response
+        else:
+            # For images and other files
+            return send_file(file_path, mimetype=content_type)
+    except Exception as e:
+        logger.error(f"Error serving file: {str(e)}")
+        return jsonify({"error": "Error serving file"}), 500
 
 # Get processing status
 @app.route('/status/<job_id>', methods=['GET'])
@@ -278,28 +340,28 @@ def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, fon
             processing_jobs[job_id]["message"] = f"Downloading segment {i+1}/{len(segments)}"
             processing_jobs[job_id]["progress"] = 30 + (i * 15 // len(segments))
             
-            # Download just this segment
-            segment_video = download_video_segment(
-                youtube_url, 
-                start_time, 
-                end_time, 
-                segment_id=i+1, 
-                total_segments=len(segments)
-            )
-            
-            if not segment_video:
-                logger.error(f"Failed to download segment {i+1}")
-                continue
-                
             # Generate unique filename with job ID prefix
             output_filename = f"{output_dir}/{job_id}_short_{i+1}.mp4"
+            thumbnail_path = output_filename.replace(".mp4", ".jpg")
             
-            # Update status for processing
-            processing_jobs[job_id]["message"] = f"Processing segment {i+1}/{len(segments)}"
-            processing_jobs[job_id]["progress"] = 45 + (i * 55 // len(segments))
-            
-            # Process the segment
             try:
+                # Download just this segment
+                segment_video = download_video_segment(
+                    youtube_url, 
+                    start_time, 
+                    end_time, 
+                    segment_id=i+1, 
+                    total_segments=len(segments)
+                )
+                
+                if not segment_video:
+                    logger.error(f"Failed to download segment {i+1}")
+                    continue
+                
+                # Update status for processing
+                processing_jobs[job_id]["message"] = f"Processing segment {i+1}/{len(segments)}"
+                processing_jobs[job_id]["progress"] = 45 + (i * 55 // len(segments))
+                
                 # Create subtitle file for this segment
                 temp_dir = f"temp_{os.path.basename(output_filename).split('.')[0]}"
                 os.makedirs(temp_dir, exist_ok=True)
@@ -321,31 +383,38 @@ def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, fon
                     # Add subtitles
                     logger.info(f"Adding subtitles to segment {i+1}...")
                     
-                    from video_processor import add_subtitles
                     success = add_subtitles(tracked_segment, subtitle_file, output_filename, font_size)
                     
                     # Generate thumbnail
                     if success:
-                        thumbnail_path = output_filename.replace(".mp4", ".jpg")
                         extract_thumbnail(output_filename, thumbnail_path)
                         
-                        # Build path that can be accessed from frontend
-                        video_url = f"/shorts/{job_id}_short_{i+1}.mp4"
-                        thumbnail_url = f"/shorts/{job_id}_short_{i+1}.jpg"
-                        
-                        # Add to videos list
-                        new_video = {
-                            "id": f"short-{i+1}",
-                            "title": f"Short {i+1}: {segment.get('reason', 'Engaging clip')}",
-                            "url": video_url,
-                            "thumbnailUrl": thumbnail_url,
-                            "filePath": output_filename,  # For debugging
-                            "duration": f"{int(end_time - start_time)}s",
-                            "segment": segment
-                        }
-                        
-                        processing_jobs[job_id]["videos"].append(new_video)
-                        logger.info(f"Segment {i+1} ready for viewing")
+                        # Check if the video file exists and is valid before adding to list
+                        if os.path.exists(output_filename) and os.path.getsize(output_filename) > 10000:  # Ensure file is at least 10KB
+                            # Log file info
+                            logger.info(f"Video file created: {output_filename}, size: {os.path.getsize(output_filename)} bytes")
+                            
+                            # Create a simple direct URL to the file
+                            video_basename = os.path.basename(output_filename)
+                            thumbnail_basename = os.path.basename(thumbnail_path)
+                            
+                            # SIMPLIFIED: Use direct file URLs
+                            video_url = f"/video/{video_basename}"
+                            thumbnail_url = f"/thumbnail/{thumbnail_basename}"
+                            
+                            # Add to videos list with explicit paths
+                            new_video = {
+                                "id": f"short-{i+1}",
+                                "title": f"Short {i+1}: {segment.get('reason', 'Engaging clip')}",
+                                "url": video_url,
+                                "thumbnailUrl": thumbnail_url,
+                                "duration": f"{int(end_time - start_time)}s"
+                            }
+                            
+                            processing_jobs[job_id]["videos"].append(new_video)
+                            logger.info(f"Added video to job results: {video_url}")
+                        else:
+                            logger.error(f"Video file missing or invalid: {output_filename}")
                 else:
                     logger.error(f"Failed face tracking for segment {i+1}")
             except Exception as e:
@@ -380,6 +449,18 @@ def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, fon
 def test_api():
     logger.info("Test API endpoint called")
     return jsonify({"status": "ok", "message": "API is working"})
+
+# Simple, direct route for video files
+@app.route('/video/<filename>')
+def serve_video_file(filename):
+    directory = os.path.abspath("shorts_output")
+    return send_file(os.path.join(directory, filename), mimetype='video/mp4')
+
+# Simple route for thumbnail files  
+@app.route('/thumbnail/<filename>')
+def serve_thumbnail_file(filename):
+    directory = os.path.abspath("shorts_output")
+    return send_file(os.path.join(directory, filename), mimetype='image/jpeg')
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

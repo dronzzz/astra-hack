@@ -2,6 +2,9 @@ import os
 import subprocess
 from subtitle_generator import create_word_by_word_subtitle_file
 from face_tracker import track_face_and_crop_mediapipe
+import logging
+
+logger = logging.getLogger('youtube-shorts')
 
 
 def extract_segment(video_path, start_time, end_time, output_path):
@@ -42,6 +45,25 @@ def add_subtitles(video_path, subtitle_path, output_path, font_size=12):
         return True
     except subprocess.CalledProcessError as e:
         print(f"Error adding subtitles: {e}")
+        return False
+
+
+def extract_thumbnail(video_path, output_path):
+    """Extract a thumbnail from a video file using ffmpeg"""
+    try:
+        logger.info(f"Generating thumbnail from {video_path} to {output_path}")
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', video_path,
+            '-ss', '00:00:01',  # Take frame from 1 second in
+            '-vframes', '1',    # Take just one frame
+            '-q:v', '2',        # High quality
+            output_path
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except Exception as e:
+        logger.error(f"Error extracting thumbnail: {e}")
         return False
 
 

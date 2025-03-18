@@ -4,13 +4,13 @@ interface ProcessingProgressProps {
   jobId: string | null;
 }
 
-export const ProcessingProgress = ({
+const ProcessingProgress = ({
   progress,
   currentStage,
   jobId,
 }: ProcessingProgressProps) => {
   return (
-    <div className="mt-8 p-6 bg-ai-light rounded-lg border border-ai-lighter">
+    <div className="mt-8 p-6 bg-ai-light rounded-lg border border-ai-lighter animate-in fade-in duration-300">
       <h3 className="text-lg font-medium text-white mb-2">
         Processing Your Video
       </h3>
@@ -18,7 +18,8 @@ export const ProcessingProgress = ({
       <div className="space-y-4">
         <div>
           <p className="text-sm text-ai-muted mb-1">Current Status:</p>
-          <p className="text-white font-medium">
+          <p className="text-white font-medium flex items-center">
+            <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
             {currentStage || "Initializing..."}
           </p>
         </div>
@@ -41,9 +42,8 @@ export const ProcessingProgress = ({
           <p className="mt-1">
             This process can take several minutes depending on the video length.
           </p>
-          <p className="mt-3 flex items-center">
-            <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
-            Live status updates will appear here
+          <p className="mt-3">
+            Videos will appear below as soon as they're ready.
           </p>
         </div>
       </div>
