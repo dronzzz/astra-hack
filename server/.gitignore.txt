@@ -1,0 +1,4 @@
+shorts_outputt
+shorts_output
+outputs
+base_trash
