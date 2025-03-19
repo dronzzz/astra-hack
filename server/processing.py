@@ -51,6 +51,10 @@ def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, fon
         output_dir = "shorts_output"
         os.makedirs(output_dir, exist_ok=True)
         
+        # Create subtitle storage directory
+        subtitle_storage_dir = os.path.join(output_dir, "subtitles")
+        os.makedirs(subtitle_storage_dir, exist_ok=True)
+        
         # Initialize videos array in the job status
         processing_jobs[job_id] = {
             "status": "processing",
@@ -129,6 +133,49 @@ def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, fon
                     words_per_subtitle=words_per_subtitle
                 )
                 
+                # IMPORTANT NEW CODE: Save a permanent copy of the subtitle file to shorts_output
+                permanent_srt_file = output_filename.replace(".mp4", ".srt")
+                if os.path.exists(subtitle_file):
+                    shutil.copy(subtitle_file, permanent_srt_file)
+                    logger.info(f"Saved permanent subtitle file: {permanent_srt_file}")
+                
+                # NEW CODE: Also extract just the text content and save it separately
+                if os.path.exists(subtitle_file):
+                    try:
+                        # Extract text from SRT file
+                        subtitle_text = []
+                        with open(subtitle_file, 'r', encoding='utf-8') as f:
+                            lines = f.readlines()
+                            
+                        # SRT format: number, timestamps, text, blank line, repeat
+                        i = 0
+                        while i < len(lines):
+                            line = lines[i].strip()
+                            if line.isdigit():  # This is a subtitle number
+                                i += 1  # Skip to timestamp line
+                                i += 1  # Skip to text line
+                                # Collect all text lines until a blank line
+                                text_lines = []
+                                while i < len(lines) and lines[i].strip():
+                                    text_lines.append(lines[i].strip())
+                                    i += 1
+                                
+                                if text_lines:
+                                    subtitle_text.append(" ".join(text_lines))
+                            else:
+                                i += 1
+                        
+                        if subtitle_text:
+                            text_content = " ".join(subtitle_text)
+                            # Save to text file in the subtitles directory
+                            video_name_without_ext = os.path.splitext(os.path.basename(output_filename))[0]
+                            text_file_path = os.path.join(subtitle_storage_dir, f"{video_name_without_ext}.txt")
+                            with open(text_file_path, 'w', encoding='utf-8') as f:
+                                f.write(text_content)
+                            logger.info(f"Saved text content to: {text_file_path}")
+                    except Exception as e:
+                        logger.error(f"Error extracting subtitle text: {e}")
+                
                 # Process with face tracking
                 tracked_segment = f"{temp_dir}/tracked_segment.mp4"
                 logger.info(f"Applying face tracking to segment {i+1}...")
@@ -174,15 +221,21 @@ def process_video_job(job_id, youtube_url, aspect_ratio, words_per_subtitle, fon
             except Exception as e:
                 logger.exception(f"Error processing segment {i+1}: {str(e)}")
             finally:
-                # Clean up temporary files
+                # Keep temp files for dubbing - DON'T DELETE THEM
+                logger.info(f"Preserving temporary files for segment {i+1} for future dubbing")
+                
+                # If needed, you could add a timestamp to cleanup old files later
+                # But for now, we'll keep everything
+                
+                # Instead of deleting, we'll just log
                 try:
                     if os.path.exists(segment_video):
-                        os.remove(segment_video)
+                        logger.info(f"Preserving segment video: {segment_video}")
                     
                     if os.path.exists(temp_dir):
-                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        logger.info(f"Preserving temp directory: {temp_dir}")
                 except Exception as cleanup_error:
-                    logger.error(f"Error cleaning up temporary files: {cleanup_error}")
+                    logger.error(f"Error checking temporary files: {cleanup_error}")
         
         # Update final status
         if len(processing_jobs[job_id]["videos"]) > 0:

@@ -1,8 +1,7 @@
-
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { Menu, X, Upload } from 'lucide-react';
-import { Button } from './ui/button';
+import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
+import { Menu, X, Upload, TrendingUpIcon } from "lucide-react";
+import { Button } from "./ui/button";
 
 const Navbar = () => {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -13,14 +12,16 @@ const Navbar = () => {
     const handleScroll = () => {
       setIsScrolled(window.scrollY > 10);
     };
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
   return (
     <header
       className={`fixed top-0 w-full z-50 transition-all duration-300 ${
-        isScrolled || mobileMenuOpen ? 'bg-ai-darker/95 backdrop-blur-md' : 'bg-transparent'
+        isScrolled || mobileMenuOpen
+          ? "bg-ai-darker/95 backdrop-blur-md"
+          : "bg-transparent"
       }`}
     >
       <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
@@ -35,17 +36,36 @@ const Navbar = () => {
 
           {/* Desktop Menu */}
           <div className="hidden md:flex items-center gap-8">
-            <Link to="/" className="text-ai-text hover:text-white transition-colors">
+            <Link
+              to="/"
+              className="text-ai-text hover:text-white transition-colors"
+            >
               Home
             </Link>
-            <Link to="/upload" className="text-ai-text hover:text-white transition-colors flex items-center gap-1">
+            <Link
+              to="/upload"
+              className="text-ai-text hover:text-white transition-colors flex items-center gap-1"
+            >
               <Upload size={18} />
               <span>Upload</span>
             </Link>
-            <a href="#features" className="text-ai-text hover:text-white transition-colors">
+            <Link
+              to="/analyze-trend"
+              className="text-ai-text hover:text-white transition-colors flex items-center gap-2"
+            >
+              <TrendingUpIcon className="h-5 w-5" />
+              <span>Trend Analyzer</span>
+            </Link>
+            <a
+              href="#features"
+              className="text-ai-text hover:text-white transition-colors"
+            >
               Features
             </a>
-            <a href="#how-it-works" className="text-ai-text hover:text-white transition-colors">
+            <a
+              href="#how-it-works"
+              className="text-ai-text hover:text-white transition-colors"
+            >
               How It Works
             </a>
           </div>
@@ -53,9 +73,7 @@ const Navbar = () => {
           {/* CTA Button */}
           <div className="hidden md:block">
             <Link to="/upload">
-              <Button className="ai-btn-primary">
-                Get Started
-              </Button>
+              <Button className="ai-btn-primary">Get Started</Button>
             </Link>
           </div>
 
@@ -87,6 +105,14 @@ const Navbar = () => {
             >
               <Upload size={18} />
               <span>Upload</span>
+            </Link>
+            <Link
+              to="/analyze-trend"
+              className="text-ai-text hover:text-white transition-colors py-2 flex items-center gap-2"
+              onClick={() => setMobileMenuOpen(false)}
+            >
+              <TrendingUpIcon className="h-5 w-5" />
+              <span>Trend Analyzer</span>
             </Link>
             <a
               href="#features"

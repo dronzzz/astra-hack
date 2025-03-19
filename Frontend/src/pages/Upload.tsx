@@ -111,7 +111,12 @@ const Upload = () => {
                   </span>
                 )}
               </div>
-              <VideoShorts shorts={shorts} isProcessing={isProcessing} />
+              {console.log("Passing jobId to VideoShorts:", jobId)}
+              <VideoShorts
+                shorts={shorts}
+                isProcessing={isProcessing}
+                jobId={jobId}
+              />
             </div>
           )}
 
