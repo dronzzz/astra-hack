@@ -49,7 +49,7 @@ const Upload = () => {
       } catch (error) {
         console.error("Error polling for status:", error);
       }
-    }, 2000);
+    }, 1000); // Poll every second for quicker updates
 
     return () => clearInterval(interval);
   }, [jobId, isProcessing]);
@@ -57,15 +57,14 @@ const Upload = () => {
   const handleUploadComplete = (
     success: boolean,
     message: string,
-    data?: any[]
+    data?: any
   ) => {
     if (success && data && data.length > 0 && data[0].jobId) {
-      // This is the initial job start response
       setJobId(data[0].jobId);
-      setProcessMessage("Processing started");
       setIsProcessing(true);
+      setProgress(0);
+      setCurrentStage("Starting video processing");
     } else {
-      // This is an error or a regular update
       setProcessMessage(message);
     }
   };
@@ -90,7 +89,7 @@ const Upload = () => {
             setCurrentStage={setCurrentStage}
           />
 
-          {/* Show progress when processing */}
+          {/* Show the cool processing card when processing */}
           {isProcessing && jobId && (
             <ProcessingProgress
               progress={progress}
@@ -99,9 +98,9 @@ const Upload = () => {
             />
           )}
 
-          {/* Show shorts as they become available - even during processing */}
+          {/* Show shorts as they become available */}
           {shorts.length > 0 && (
-            <div className="mt-16">
+            <div className="mt-12 animate-in fade-in duration-500">
               <div className="mb-4 flex items-center">
                 <h2 className="text-xl font-semibold text-ai-blue">
                   Generated Shorts
@@ -112,16 +111,14 @@ const Upload = () => {
                   </span>
                 )}
               </div>
-              <VideoShorts shorts={shorts} />
+              <VideoShorts shorts={shorts} isProcessing={isProcessing} />
             </div>
           )}
 
-          {/* Show message when no shorts are available yet */}
-          {isProcessing && shorts.length === 0 && progress > 30 && (
-            <div className="mt-8 p-4 bg-ai-light/30 rounded-lg border border-ai-lighter">
-              <p className="text-ai-muted text-center">
-                Shorts will appear here as soon as they're processed...
-              </p>
+          {/* Show error message if any */}
+          {!isProcessing && processMessage && (
+            <div className="mt-8 p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400">
+              {processMessage}
             </div>
           )}
         </div>

@@ -1,0 +1,26 @@
+@keyframes float {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 0.2;
+  }
+  50% {
+    transform: translateY(-15px) rotate(5deg);
+    opacity: 0.5;
+  }
+  100% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 0.2;
+  }
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 0.1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+  100% {
+    opacity: 0.1;
+  }
+} 
