@@ -44,7 +44,6 @@ const SieveDubbing: React.FC<SieveDubbingProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [apiKey, setApiKey] = useState("");
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
 
   // Function to submit dubbing job
@@ -54,7 +53,7 @@ const SieveDubbing: React.FC<SieveDubbingProps> = ({
     setStatusMessage("Submitting dubbing job...");
 
     try {
-      // Submit the dubbing job
+      // Submit the dubbing job to the new endpoint
       const response = await fetch("/api/sieve-dub", {
         method: "POST",
         headers: {
@@ -67,7 +66,7 @@ const SieveDubbing: React.FC<SieveDubbingProps> = ({
           voiceEngine,
           enableLipsyncing: enableLipSync,
           preserveBackgroundAudio: true,
-          apiKey: apiKey || undefined,
+          // No need to send API key anymore as it's hardcoded in the backend
         }),
       });
 
@@ -93,39 +92,41 @@ const SieveDubbing: React.FC<SieveDubbingProps> = ({
   };
 
   // Function to poll dubbing job status
-  const pollStatus = async (id: string) => {
+  const pollStatus = async (dubbingId: string) => {
     try {
-      const response = await fetch(`/api/sieve-dub-status/${id}`);
-      const data = await response.json();
+      const response = await fetch(`/api/sieve-dub-status/${dubbingId}`);
 
       if (!response.ok) {
-        throw new Error(data.error || "Failed to check dubbing status");
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to check status");
       }
+
+      const data = await response.json();
+      console.log("Dubbing status:", data);
+
+      // Update status message
+      setStatusMessage(data.message);
 
       if (data.status === "completed") {
         setIsProcessing(false);
-        setStatusMessage("Dubbing completed successfully!");
-
-        // Call the callback with the video URL
-        if (data.videoUrl) {
-          onDubbingComplete(data.videoUrl, language);
+        // Call the callback to notify parent component
+        if (onDubbingComplete) {
+          onDubbingComplete(dubbingId, {
+            videoUrl: data.videoUrl,
+            thumbnailUrl: data.thumbnailUrl,
+          });
         }
       } else if (data.status === "error") {
         setIsProcessing(false);
         setError(data.message || "An error occurred during dubbing");
       } else {
-        // Still processing, poll again in 5 seconds
-        setStatusMessage(
-          `Dubbing in progress: ${data.message || "Processing..."}`
-        );
-        setTimeout(() => pollStatus(id), 5000);
+        // Still processing, poll again after a delay
+        setTimeout(() => pollStatus(dubbingId), 5000);
       }
     } catch (err) {
       console.error("Error checking dubbing status:", err);
-      setError(
-        err instanceof Error ? err.message : "Failed to check dubbing status"
-      );
       setIsProcessing(false);
+      setError(err instanceof Error ? err.message : "Failed to check status");
     }
   };
 

@@ -80,16 +80,20 @@ const VideoShorts = ({
     setShowLanguageSelector((prev) => ({ ...prev, [segmentId]: false }));
 
     const requestData = {
-      segmentId,
       jobId,
+      segmentId,
       language,
+      // Add Sieve-specific parameters
+      voiceEngine: "elevenlabs (voice cloning)",
+      enableLipsyncing: false,
+      preserveBackgroundAudio: true,
     };
 
     console.log("Sending request data:", requestData);
 
     try {
-      // Get the full URL for debugging
-      const url = new URL("/api/dub-segment", window.location.origin);
+      // *** CHANGED TO USE THE NEW SIEVE ENDPOINT ***
+      const url = new URL("/api/sieve-dub", window.location.origin);
       console.log(`Sending POST to ${url.toString()} with data:`, requestData);
 
       const response = await fetch(url.toString(), {
@@ -123,15 +127,80 @@ const VideoShorts = ({
         throw new Error(responseData?.error || "Failed to dub video");
       }
 
-      console.log("Dubbing successful:", responseData);
-      setDubbingStatus((prev) => ({ ...prev, [segmentId]: "success" }));
+      console.log("Dubbing submitted successfully:", responseData);
 
-      // Show a notification to the user
-      alert(
-        `Successfully dubbed video to ${language}! Refresh the page to see it.`
-      );
+      // Begin polling for status
+      if (responseData.dubbingId) {
+        pollDubbingStatus(segmentId, responseData.dubbingId, language);
+      } else {
+        setDubbingStatus((prev) => ({ ...prev, [segmentId]: "success" }));
+      }
     } catch (error) {
       console.error("Error dubbing video:", error);
+      setDubbingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
+    }
+  };
+
+  // Add a polling function for the dubbing status that works with your component's structure
+  const pollDubbingStatus = async (
+    segmentId: string,
+    dubbingId: string,
+    language: string
+  ) => {
+    try {
+      const response = await fetch(`/api/sieve-dub-status/${dubbingId}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to check dubbing status");
+      }
+
+      console.log(`Dubbing status for ${segmentId}:`, data);
+
+      if (data.status === "completed") {
+        // Dubbing is complete, update the UI
+        setDubbingStatus((prev) => ({ ...prev, [segmentId]: "success" }));
+
+        // If there's a videoUrl in the response, update the video sources
+        if (data.videoUrl) {
+          console.log(
+            `Updating video source for ${segmentId} to: ${data.videoUrl}`
+          );
+
+          // Add the new video to the shorts array
+          const dubbedShort = shorts.find((short) => short.id === segmentId);
+
+          if (dubbedShort) {
+            const dubbedVideo = {
+              ...dubbedShort,
+              id: `${segmentId}-${language}`, // Create a new ID for the dubbed version
+              url: data.videoUrl,
+              thumbnailUrl: data.thumbnailUrl || dubbedShort.thumbnailUrl,
+              isDubbed: true,
+              originalId: segmentId,
+              language: language,
+            };
+
+            // Add this dubbed video to your list of shorts
+            setShorts((prev) => [...prev, dubbedVideo]);
+
+            // Show a simple console log instead of toast
+            console.log(`Dubbing complete for ${segmentId} in ${language}`);
+          }
+        }
+      } else if (data.status === "error") {
+        // Error occurred during dubbing
+        setDubbingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
+        console.error("Dubbing error:", data.message);
+      } else {
+        // Still processing, poll again after a delay
+        setTimeout(
+          () => pollDubbingStatus(segmentId, dubbingId, language),
+          5000
+        );
+      }
+    } catch (error) {
+      console.error("Error checking dubbing status:", error);
       setDubbingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
     }
   };

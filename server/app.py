@@ -15,6 +15,8 @@ import glob
 import re
 from textblob import TextBlob
 from pytrends.request import TrendReq
+import sieve
+import threading
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, 
@@ -29,6 +31,12 @@ app.register_blueprint(upload_bp)
 
 # Add this configuration
 YOUTUBE_API_KEY = 'AIzaSyCipVUnLSuT8OiUUrKzPbrTB1H61M_YTKc'  # You might want to store this securely
+
+# Add a Sieve API key directly
+SIEVE_API_KEY = "DwOcdC4CPfwP-U1djJIqD0npN5ERMoGiSp6K7-cdHqk"
+
+# Set Sieve API key
+sieve.api_key = SIEVE_API_KEY
 
 # Serve static files from shorts_output
 @app.route('/shorts_output/<path:filename>')
@@ -601,6 +609,30 @@ def redirect_to_trend_analyzer():
     # Option 2: If using separate frontend/backend, redirect to frontend URL
     # return redirect('http://localhost:3000/analyze-trend')
 
+@app.route('/api/sieve-dub-status/<dubbing_id>', methods=['GET'])
+def sieve_dub_status(dubbing_id):
+    """Get the status of a Sieve dubbing job"""
+    dubbing_jobs = app.config.get('dubbing_jobs', {})
+    
+    if dubbing_id not in dubbing_jobs:
+        return jsonify({"error": "Dubbing job not found"}), 404
+        
+    job = dubbing_jobs[dubbing_id]
+    
+    # For completed jobs, include the video URL
+    if job["status"] == "completed":
+        return jsonify({
+            "status": job["status"],
+            "message": job["message"],
+            "videoUrl": job.get("videoUrl"),
+            "thumbnailUrl": job.get("thumbnailUrl")
+        })
+    else:
+        return jsonify({
+            "status": job["status"],
+            "message": job["message"]
+        })
+
 if __name__ == "__main__":
     # Make sure the output directory exists
     os.makedirs("shorts_output", exist_ok=True)
@@ -608,3 +640,4 @@ if __name__ == "__main__":
     # Run the server
     logger.info("Starting Flask server on port 5050")
     app.run(debug=True, host='0.0.0.0', port=5050)
+    
