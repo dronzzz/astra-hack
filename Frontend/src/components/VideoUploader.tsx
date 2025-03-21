@@ -3,6 +3,7 @@ import { Card, CardContent } from "./ui/card";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Loader2 } from "lucide-react";
+import { apiPost, apiGet, JobResponse, JobStatus } from "../lib/api";
 
 interface VideoUploaderProps {
   isProcessing: boolean;
@@ -64,35 +65,19 @@ const VideoUploader = ({
     try {
       console.log("Processing YouTube link:", youtubeLink);
 
-      // Make API call to process the YouTube link with the new endpoint
-      const response = await fetch("/generate-short", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          youtube_url: youtubeLink, // Changed from youtubeUrl to youtube_url
-          aspect_ratio: "9:16", // Changed from aspectRatio to aspect_ratio
-        }),
+      // Use the API utility instead of direct fetch
+      const data = await apiPost<JobResponse>("generate-short", {
+        youtubeUrl: youtubeLink,
+        aspectRatio: "9:16",
       });
 
-      console.log("Response status:", response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Error response:", errorText);
-        throw new Error(`Server error: ${response.status}`);
-      }
-
-      const data = await response.json();
       console.log("Process result:", data);
 
-      if (data.job_id) {
-        // Changed from jobId to job_id
+      if (data.jobId) {
         // Set the jobId so we can show progress
-        onUploadComplete(true, "Processing started", [{ jobId: data.job_id }]);
+        onUploadComplete(true, "Processing started", [{ jobId: data.jobId }]);
         // Start polling for status
-        startStatusPolling(data.job_id);
+        startStatusPolling(data.jobId);
       } else {
         throw new Error("No job ID returned from server");
       }
@@ -112,13 +97,8 @@ const VideoUploader = ({
   const startStatusPolling = (jobId: string) => {
     const interval = setInterval(async () => {
       try {
-        const response = await fetch(`/status/${jobId}`);
-
-        if (!response.ok) {
-          throw new Error(`Failed to get status: ${response.status}`);
-        }
-
-        const status = await response.json();
+        // Use the API utility for status polling
+        const status = await apiGet<JobStatus>(`status/${jobId}`);
         console.log("Job status:", status);
 
         // Update progress and stage in parent component
@@ -144,7 +124,7 @@ const VideoUploader = ({
             onUploadComplete(true, "Video processing completed", [
               {
                 id: jobId,
-                url: `/download/${jobId}`,
+                url: `shorts_output/${jobId}.mp4`,
                 title: `Processed Video (${status.aspect_ratio || "9:16"})`,
                 description:
                   status.segment_info?.reason || "Video processed successfully",

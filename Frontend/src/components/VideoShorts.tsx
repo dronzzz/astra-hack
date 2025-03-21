@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { apiPost } from "../lib/api";
 
 // Define language options
 const LANGUAGE_OPTIONS = [
@@ -9,6 +10,14 @@ const LANGUAGE_OPTIONS = [
   { value: "KR", label: "Korean" },
   { value: "ZH", label: "Chinese" },
 ];
+
+// Define types for YouTube upload response
+interface YouTubeUploadResponse {
+  success: boolean;
+  youtubeUrl?: string;
+  youtubeId?: string;
+  error?: string;
+}
 
 interface VideoShortsProps {
   shorts: any[];
@@ -215,7 +224,7 @@ const VideoShorts = ({
 
   const handleUploadToYouTube = async (segmentId: string) => {
     if (!jobId) {
-      console.error("No job ID provided");
+      console.error("No jobId provided for YouTube upload");
       return;
     }
 
@@ -238,31 +247,18 @@ const VideoShorts = ({
     };
 
     try {
-      // Make sure we're using the API endpoint through the Vite proxy
-      const response = await fetch("/api/youtube-upload", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestData),
-      });
-
-      // First check if response is ok before trying to parse JSON
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Upload failed:", response.status, errorText);
-        setUploadingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
-        return;
-      }
-
-      const data = await response.json();
+      // Use apiPost with the correct type annotation
+      const data = await apiPost<YouTubeUploadResponse>(
+        "api/youtube-upload",
+        requestData
+      );
 
       console.log("Upload succeeded:", data);
       setUploadingStatus((prev) => ({ ...prev, [segmentId]: "success" }));
       setUploadResults((prev) => ({
         ...prev,
         [segmentId]: {
-          videoId: data.videoId,
+          videoId: data.youtubeId,
           youtubeUrl: data.youtubeUrl,
         },
       }));
