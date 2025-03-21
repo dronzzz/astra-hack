@@ -26,7 +26,7 @@ CORS(app)
 processing_jobs = {}
 
 # External processing server URL
-EXTERNAL_API_URL = "https://1beb-34-59-123-131.ngrok-free.app/api/process-youtube"
+EXTERNAL_API_URL = "https://f79e-34-138-251-52.ngrok-free.app/api/process-youtube"
 
 # Define OAuth 2.0 scopes
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
@@ -44,6 +44,218 @@ def get_authenticated_service():
     flow.redirect_uri = 'http://localhost:5050/oauth2callback'
     creds = flow.run_local_server(port=5050)
     return build('youtube', 'v3', credentials=creds)
+
+
+@app.route('/api/dub-video', methods=['POST'])
+def dub_video_handler():
+    """Dub a video segment into a specified language"""
+    try:
+        data = request.json
+        logger.info(f"Video dubbing request: {data}")
+
+        # Validate required parameters
+        required_params = ['segmentId', 'jobId', 'language']
+        for param in required_params:
+            if param not in data:
+                return jsonify({"error": f"Missing {param} parameter"}), 400
+
+        segment_id = data.get('segmentId')
+        job_id = data.get('jobId')
+        target_language = data.get('language').lower()
+
+        # Map emoji/language name to Sieve's expected language code
+        language_mapping = {
+            "english": "english",
+            "hindi": "hindi",
+            "portuguese": "portuguese",
+            "mandarin": "chinese",
+            "chinese": "chinese",
+            "spanish": "spanish",
+            "french": "french",
+            "german": "german",
+            "japanese": "japanese",
+            "arabic": "arabic",
+            "russian": "russian",
+            "korean": "korean",
+            "indonesian": "indonesian",
+            "italian": "italian",
+            "dutch": "dutch",
+            "turkish": "turkish",
+            "polish": "polish",
+            "swedish": "swedish",
+            "tagalog": "tagalog",
+            "filipino": "tagalog",
+            "malay": "malay",
+            "romanian": "romanian",
+            "ukrainian": "ukrainian",
+            "greek": "greek",
+            "czech": "czech",
+            "danish": "danish",
+            "finnish": "finnish",
+            "bulgarian": "bulgarian",
+            "croatian": "croatian",
+            "slovak": "slovak",
+            "tamil": "tamil"
+        }
+
+        # Get the proper language code
+        if target_language in language_mapping:
+            sieve_language = language_mapping[target_language]
+        else:
+            return jsonify({"error": f"Unsupported language: {target_language}"}), 400
+
+        # Check if job exists
+        if job_id not in processing_jobs:
+            return jsonify({"error": "Job not found"}), 404
+
+        # Find video path from job
+        job_info = processing_jobs[job_id]
+        video_path = None
+        for video in job_info.get('videos', []):
+            if video.get('id') == segment_id:
+                video_url = video.get('url')
+                if video_url:
+                    video_path = os.path.join(
+                        os.getcwd(), video_url.lstrip('/'))
+                break
+
+        if not video_path or not os.path.exists(video_path):
+            return jsonify({"error": "Video file not found"}), 404
+
+        # Create a unique output directory for this dubbing job
+        dubbing_id = str(uuid.uuid4())
+        output_dir = os.path.join(
+            os.getcwd(), f"shorts_output/{job_id}/dubbed")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Start dubbing in a background thread
+        thread = threading.Thread(
+            target=process_dubbing,
+            args=(video_path, sieve_language, output_dir,
+                  dubbing_id, job_id, segment_id)
+        )
+        thread.daemon = True
+        thread.start()
+
+        # Update job info to indicate dubbing is in progress
+        for video in job_info.get('videos', []):
+            if video.get('id') == segment_id:
+                if 'dubbing' not in video:
+                    video['dubbing'] = {}
+                video['dubbing'][sieve_language] = {
+                    'status': 'processing',
+                    'id': dubbing_id
+                }
+                break
+
+        return jsonify({
+            "success": True,
+            "message": f"Dubbing started for language: {sieve_language}",
+            "dubbingId": dubbing_id
+        })
+
+    except Exception as e:
+        logger.exception(f"Error dubbing video: {e}")
+        return jsonify({"error": f"Failed to process dubbing request: {str(e)}"}), 500
+
+
+def process_dubbing(video_path, target_language, output_dir, dubbing_id, job_id, segment_id):
+    """Process video dubbing using Sieve API"""
+    try:
+        import sieve
+
+        logger.info(
+            f"Starting dubbing job for {video_path} to {target_language}")
+
+        # Define the parameters for dubbing
+        source_file = sieve.File(path=video_path)
+        translation_engine = "gpt4"
+        voice_engine = "elevenlabs (voice cloning)"
+        transcription_engine = "whisper-zero"
+        output_mode = "voice-dubbing"
+        edit_segments = list()
+        return_transcript = False
+        preserve_background_audio = True
+        safewords = ""
+        translation_dictionary = ""
+        start_time = 0
+        end_time = -1
+        enable_lipsyncing = False
+        lipsync_backend = "sievesync-1.1"
+        lipsync_enhance = "default"
+
+        # Initialize the dubbing function and start the job
+        dubbing = sieve.function.get("sieve/dubbing")
+        output = dubbing.push(
+            source_file,
+            target_language,
+            translation_engine,
+            voice_engine,
+            transcription_engine,
+            output_mode,
+            edit_segments,
+            return_transcript,
+            preserve_background_audio,
+            safewords,
+            translation_dictionary,
+            start_time,
+            end_time,
+            enable_lipsyncing,
+            lipsync_backend,
+            lipsync_enhance
+        )
+
+        logger.info(
+            f'Dubbing job started for {video_path}. Waiting for results...')
+
+        # Process the output
+        for output_object in output.result():
+            # Get the temporary file path of the dubbed video
+            tmp_path = output_object.path
+            logger.info(f"Dubbed video downloaded to: {tmp_path}")
+
+            # Define the destination path
+            dubbed_filename = f"dubbed_{segment_id}_{target_language}.mp4"
+            dest_path = os.path.join(output_dir, dubbed_filename)
+
+            # Move the file from the temporary location to the destination
+            shutil.move(tmp_path, dest_path)
+            logger.info(f"Dubbed video moved to: {dest_path}")
+
+            # Generate a URL path for the frontend
+            relative_path = f"shorts_output/{job_id}/dubbed/{dubbed_filename}"
+            url_path = f"/shorts_output/{job_id}/dubbed/{dubbed_filename}"
+
+            # Update the job info with the dubbed video URL
+            job_info = processing_jobs.get(job_id, {})
+            for video in job_info.get('videos', []):
+                if video.get('id') == segment_id:
+                    if 'dubbing' not in video:
+                        video['dubbing'] = {}
+                    video['dubbing'][target_language] = {
+                        'status': 'completed',
+                        'id': dubbing_id,
+                        'url': url_path
+                    }
+                    break
+
+            return url_path
+
+    except Exception as e:
+        logger.exception(f"Error in dubbing process: {e}")
+        # Update job info to indicate dubbing failed
+        job_info = processing_jobs.get(job_id, {})
+        for video in job_info.get('videos', []):
+            if video.get('id') == segment_id:
+                if 'dubbing' not in video:
+                    video['dubbing'] = {}
+                video['dubbing'][target_language] = {
+                    'status': 'failed',
+                    'id': dubbing_id,
+                    'error': str(e)
+                }
+                break
+        return None
 
 
 def upload_video(service, video_path, title, description, category, privacy_status):
@@ -365,14 +577,11 @@ def youtube_upload_handler():
                     video['youtubeId'] = video_id
                     break
 
-            return jsonify({
-                "success": True,
-                "youtubeUrl": video_url,
-                "youtubeId": video_id
-            })
-        else:
-            return jsonify({"error": "Failed to upload to YouTube"}), 500
-
+        return jsonify({
+            "success": True,
+            "youtubeUrl": video_url,
+            "youtubeId": video_id
+        })
     except Exception as e:
         logger.exception(f"Error uploading to YouTube: {e}")
         return jsonify({"error": f"Failed to upload: {str(e)}"}), 500

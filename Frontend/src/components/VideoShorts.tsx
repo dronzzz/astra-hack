@@ -1,5 +1,16 @@
 import { useState, useEffect } from "react";
-import { apiPost } from "../lib/api";
+import { apiPost, getResourceUrl } from "../lib/api";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "./ui/dialog";
+import { Button } from "./ui/button";
+import { Label } from "./ui/label";
+import { Input } from "./ui/input";
+import { Textarea } from "./ui/textarea";
 
 // Define language options
 const LANGUAGE_OPTIONS = [
@@ -33,9 +44,12 @@ const VideoShorts = ({
   const [videoErrors, setVideoErrors] = useState<{ [key: string]: boolean }>(
     {}
   );
-  const [dubbingStatus, setDubbingStatus] = useState<{ [key: string]: string }>(
-    {}
-  );
+  const [dubbingStatus, setDubbingStatus] = useState<
+    Record<string, Record<string, string>>
+  >({});
+  const [currentLanguage, setCurrentLanguage] = useState<
+    Record<string, string>
+  >({});
   const [showLanguageSelector, setShowLanguageSelector] = useState<{
     [key: string]: boolean;
   }>({});
@@ -46,6 +60,11 @@ const VideoShorts = ({
   const [uploadResults, setUploadResults] = useState<{ [key: string]: any }>(
     {}
   );
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [currentSegmentId, setCurrentSegmentId] = useState("");
+  const [selectedLanguages, setSelectedLanguages] = useState<
+    Record<string, string>
+  >({});
 
   // Group videos by their original segment ID
   const groupedShorts = shorts.reduce(
@@ -82,144 +101,143 @@ const VideoShorts = ({
     }));
   };
 
-  const requestDubbing = async (segmentId: string, language: string) => {
+  const handleLanguageChange = async (segmentId: string, language: string) => {
     if (!jobId) {
-      console.error("Cannot request dubbing: jobId is null or undefined");
-      setDubbingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
+      console.error("No jobId provided for dubbing");
       return;
     }
 
-    console.log(
-      `Requesting dubbing for segment ${segmentId} in language ${language}, jobId: ${jobId}`
-    );
-    setDubbingStatus((prev) => ({ ...prev, [segmentId]: "loading" }));
-    setShowLanguageSelector((prev) => ({ ...prev, [segmentId]: false }));
+    // Skip if already dubbed in this language or currently dubbing
+    if (
+      dubbingStatus[segmentId]?.[language] === "processing" ||
+      dubbingStatus[segmentId]?.[language] === "completed"
+    ) {
+      // Just update the current language
+      setCurrentLanguage((prev) => ({
+        ...prev,
+        [segmentId]: language,
+      }));
+      return;
+    }
 
-    const requestData = {
-      jobId,
-      segmentId,
-      language,
-      // Add Sieve-specific parameters
-      voiceEngine: "elevenlabs (voice cloning)",
-      enableLipsyncing: false,
-      preserveBackgroundAudio: true,
-    };
+    // Update dubbing status
+    setDubbingStatus((prev) => ({
+      ...prev,
+      [segmentId]: {
+        ...(prev[segmentId] || {}),
+        [language]: "processing",
+      },
+    }));
 
-    console.log("Sending request data:", requestData);
+    // Set current language
+    setCurrentLanguage((prev) => ({
+      ...prev,
+      [segmentId]: language,
+    }));
 
     try {
-      // *** CHANGED TO USE THE NEW SIEVE ENDPOINT ***
-      const url = new URL("/api/sieve-dub", window.location.origin);
-      console.log(`Sending POST to ${url.toString()} with data:`, requestData);
+      // Get the language code (remove emoji)
+      const languageCode = language.split(" ")[1].toLowerCase();
 
-      const response = await fetch(url.toString(), {
+      const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5050";
+      const response = await fetch(`${API_URL}/api/dub-video`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(requestData),
+        body: JSON.stringify({
+          jobId,
+          segmentId,
+          language: languageCode,
+        }),
       });
 
-      // Get the full text response regardless of status
-      const responseText = await response.text();
-      console.log(`Raw response (${response.status}): ${responseText}`);
-
-      // Try to parse the response as JSON
-      let responseData;
-      try {
-        responseData = JSON.parse(responseText);
-      } catch (e) {
-        console.error("Failed to parse response as JSON:", e);
-        responseData = { error: "Invalid JSON response" };
-      }
-
       if (!response.ok) {
-        console.error("Dubbing failed with response:", {
-          status: response.status,
-          statusText: response.statusText,
-          data: responseData,
-        });
-
-        throw new Error(responseData?.error || "Failed to dub video");
+        const errorText = await response.text();
+        console.error("Dubbing failed:", response.status, errorText);
+        setDubbingStatus((prev) => ({
+          ...prev,
+          [segmentId]: {
+            ...(prev[segmentId] || {}),
+            [language]: "failed",
+          },
+        }));
+        return;
       }
 
-      console.log("Dubbing submitted successfully:", responseData);
+      const data = await response.json();
+      console.log("Dubbing request succeeded:", data);
 
-      // Begin polling for status
-      if (responseData.dubbingId) {
-        pollDubbingStatus(segmentId, responseData.dubbingId, language);
-      } else {
-        setDubbingStatus((prev) => ({ ...prev, [segmentId]: "success" }));
-      }
+      // Start polling for dubbing status
+      pollDubbingStatus(jobId, segmentId, language);
     } catch (error) {
-      console.error("Error dubbing video:", error);
-      setDubbingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
+      console.error("Error requesting dubbing:", error);
+      setDubbingStatus((prev) => ({
+        ...prev,
+        [segmentId]: {
+          ...(prev[segmentId] || {}),
+          [language]: "failed",
+        },
+      }));
     }
   };
 
-  // Add a polling function for the dubbing status that works with your component's structure
-  const pollDubbingStatus = async (
+  // Add polling function for dubbing status
+  const pollDubbingStatus = (
+    jobId: string,
     segmentId: string,
-    dubbingId: string,
     language: string
   ) => {
-    try {
-      const response = await fetch(`/api/sieve-dub-status/${dubbingId}`);
-      const data = await response.json();
+    const interval = setInterval(async () => {
+      try {
+        const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5050";
+        const response = await fetch(`${API_URL}/status/${jobId}`);
+        const status = await response.json();
 
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to check dubbing status");
-      }
+        // Find the segment and check dubbing status
+        const videos = status.videos || [];
+        const segment = videos.find((v: any) => v.id === segmentId);
 
-      console.log(`Dubbing status for ${segmentId}:`, data);
+        if (segment && segment.dubbing) {
+          const languageCode = language.split(" ")[1].toLowerCase();
+          const dubbingInfo = segment.dubbing[languageCode];
 
-      if (data.status === "completed") {
-        // Dubbing is complete, update the UI
-        setDubbingStatus((prev) => ({ ...prev, [segmentId]: "success" }));
+          if (dubbingInfo) {
+            if (dubbingInfo.status === "completed") {
+              // Dubbing completed
+              clearInterval(interval);
+              setDubbingStatus((prev) => ({
+                ...prev,
+                [segmentId]: {
+                  ...(prev[segmentId] || {}),
+                  [language]: "completed",
+                },
+              }));
 
-        // If there's a videoUrl in the response, update the video sources
-        if (data.videoUrl) {
-          console.log(
-            `Updating video source for ${segmentId} to: ${data.videoUrl}`
-          );
-
-          // Add the new video to the shorts array
-          const dubbedShort = shorts.find((short) => short.id === segmentId);
-
-          if (dubbedShort) {
-            const dubbedVideo = {
-              ...dubbedShort,
-              id: `${segmentId}-${language}`, // Create a new ID for the dubbed version
-              url: data.videoUrl,
-              thumbnailUrl: data.thumbnailUrl || dubbedShort.thumbnailUrl,
-              isDubbed: true,
-              originalId: segmentId,
-              language: language,
-            };
-
-            // NOTE: We can't add to shorts directly since setShorts is not available here
-            // This would require the parent component to pass setShorts as a prop
-            // setShorts((prev) => [...prev, dubbedVideo]);
-
-            // Show a simple console log instead of toast
-            console.log(`Dubbing complete for ${segmentId} in ${language}`);
+              // Instead, log the information
+              console.log(
+                `Dubbed video available for ${segmentId} in ${language}: ${dubbingInfo.url}`
+              );
+            } else if (dubbingInfo.status === "failed") {
+              // Dubbing failed
+              clearInterval(interval);
+              setDubbingStatus((prev) => ({
+                ...prev,
+                [segmentId]: {
+                  ...(prev[segmentId] || {}),
+                  [language]: "failed",
+                },
+              }));
+            }
           }
         }
-      } else if (data.status === "error") {
-        // Error occurred during dubbing
-        setDubbingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
-        console.error("Dubbing error:", data.message);
-      } else {
-        // Still processing, poll again after a delay
-        setTimeout(
-          () => pollDubbingStatus(segmentId, dubbingId, language),
-          5000
-        );
+      } catch (error) {
+        console.error("Error polling dubbing status:", error);
       }
-    } catch (error) {
-      console.error("Error checking dubbing status:", error);
-      setDubbingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
-    }
+    }, 5000); // Poll every 5 seconds
+
+    // Store the interval ID for cleanup
+    return interval;
   };
 
   const handleUploadToYouTube = async (segmentId: string) => {
@@ -228,43 +246,77 @@ const VideoShorts = ({
       return;
     }
 
-    console.log(`Uploading segment ${segmentId} to YouTube`);
-    setUploadingStatus((prev) => ({ ...prev, [segmentId]: "uploading" }));
+    // Instead of immediately uploading, just set the current segment ID and open the modal
+    setCurrentSegmentId(segmentId);
+    setUploadModalOpen(true);
+  };
 
-    const segment = shorts.find((s) => s.id === segmentId);
+  const confirmUpload = async (title: string, description: string) => {
+    // Close modal
+    setUploadModalOpen(false);
+
+    if (!currentSegmentId) return;
+
+    console.log(
+      `Uploading segment ${currentSegmentId} to YouTube with title: ${title}`
+    );
+    setUploadingStatus((prev) => ({
+      ...prev,
+      [currentSegmentId]: "uploading",
+    }));
+
+    const segment = shorts.find((s) => s.id === currentSegmentId);
     if (!segment) {
-      setUploadingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
+      setUploadingStatus((prev) => ({ ...prev, [currentSegmentId]: "error" }));
       return;
     }
 
     const requestData = {
       jobId,
-      segmentId,
-      title: segment.title || `Short Video ${segmentId}`,
-      description: segment.description || "AI-generated short video",
+      segmentId: currentSegmentId,
+      title,
+      description,
       tags: ["shorts", "ai-generated", "video"],
       privacyStatus: "public",
     };
 
     try {
-      // Use apiPost with the correct type annotation
-      const data = await apiPost<YouTubeUploadResponse>(
-        "api/youtube-upload",
-        requestData
-      );
+      // Using fetch directly with full URL to bypass proxy
+      const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5050";
+      const response = await fetch(`${API_URL}/api/youtube-upload`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestData),
+      });
 
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Upload failed:", response.status, errorText);
+        setUploadingStatus((prev) => ({
+          ...prev,
+          [currentSegmentId]: "error",
+        }));
+        return;
+      }
+
+      const data = await response.json();
       console.log("Upload succeeded:", data);
-      setUploadingStatus((prev) => ({ ...prev, [segmentId]: "success" }));
+      setUploadingStatus((prev) => ({
+        ...prev,
+        [currentSegmentId]: "success",
+      }));
       setUploadResults((prev) => ({
         ...prev,
-        [segmentId]: {
+        [currentSegmentId]: {
           videoId: data.youtubeId,
           youtubeUrl: data.youtubeUrl,
         },
       }));
     } catch (error) {
       console.error("Error uploading to YouTube:", error);
-      setUploadingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
+      setUploadingStatus((prev) => ({ ...prev, [currentSegmentId]: "error" }));
     }
   };
 
@@ -313,8 +365,24 @@ const VideoShorts = ({
                       );
                       return (
                         <video
-                          src={short.url}
-                          poster={short.thumbnailUrl}
+                          src={
+                            selectedLanguages[short.id] &&
+                            short.dubbedVideos?.[selectedLanguages[short.id]] &&
+                            dubbingStatus[short.id]?.[
+                              selectedLanguages[short.id]
+                            ] === "completed"
+                              ? getResourceUrl(
+                                  short.dubbedVideos[
+                                    selectedLanguages[short.id]
+                                  ]
+                                )
+                              : getResourceUrl(short.url)
+                          }
+                          poster={
+                            short.thumbnailUrl
+                              ? getResourceUrl(short.thumbnailUrl)
+                              : undefined
+                          }
                           controls
                           playsInline
                           autoPlay={false}
@@ -347,7 +415,7 @@ const VideoShorts = ({
                             <button
                               key={lang.value}
                               onClick={() =>
-                                requestDubbing(short.id, lang.value)
+                                handleLanguageChange(short.id, lang.label)
                               }
                               className={`text-xs px-2 py-1 rounded 
                                 ${
@@ -365,14 +433,16 @@ const VideoShorts = ({
                     )}
 
                     {/* Dubbing status */}
-                    {dubbingStatus[short.id] === "loading" && (
+                    {dubbingStatus[short.id]?.[selectedLanguages[short.id]] ===
+                      "processing" && (
                       <div className="bg-ai-darker border border-ai-lighter rounded-md p-2 text-xs text-white flex items-center">
                         <div className="h-3 w-3 rounded-full border-2 border-ai-accent border-t-transparent animate-spin mr-2"></div>
                         Creating dubbed version...
                       </div>
                     )}
 
-                    {dubbingStatus[short.id] === "error" && (
+                    {dubbingStatus[short.id]?.[selectedLanguages[short.id]] ===
+                      "failed" && (
                       <div className="bg-red-900/30 border border-red-700/30 rounded-md p-2 text-xs text-red-400">
                         Error creating dubbed version. Please try again.
                       </div>
@@ -388,7 +458,7 @@ const VideoShorts = ({
                           {translations.map((translation) => (
                             <a
                               key={translation.id}
-                              href={translation.url}
+                              href={getResourceUrl(translation.url)}
                               className="text-xs px-2 py-1 bg-ai-accent/20 text-ai-accent rounded hover:bg-ai-accent/30"
                             >
                               {translation.language || "Unknown"}
@@ -401,7 +471,7 @@ const VideoShorts = ({
 
                   <div className="flex justify-between items-center mt-2">
                     <a
-                      href={short.url}
+                      href={getResourceUrl(short.url)}
                       download
                       className="text-xs px-2 py-1 bg-ai-accent text-white rounded hover:bg-ai-accent/80"
                     >
@@ -412,67 +482,67 @@ const VideoShorts = ({
                     <button
                       onClick={() => toggleLanguageSelector(short.id)}
                       className={`text-xs px-2 py-1 rounded bg-ai-accent/20 text-ai-accent ${
-                        dubbingStatus[short.id] === "success"
+                        dubbingStatus[short.id]?.[
+                          selectedLanguages[short.id]
+                        ] === "completed"
                           ? "bg-green-500/20 text-green-500"
                           : ""
                       }`}
                     >
-                      {dubbingStatus[short.id] === "success"
-                        ? "Dub Created"
-                        : "Dub to Other Languages"}
+                      {dubbingStatus[short.id]?.[
+                        selectedLanguages[short.id]
+                      ] === "completed"
+                        ? "Dubbed Version Available"
+                        : "Translate"}
                     </button>
 
                     {/* YouTube upload button */}
                     <button
                       onClick={() => handleUploadToYouTube(short.id)}
-                      disabled={
-                        uploadingStatus[short.id] === "uploading" ||
-                        uploadingStatus[short.id] === "success"
-                      }
-                      className={`text-xs px-2 py-1 rounded flex items-center gap-1
+                      disabled={uploadingStatus[short.id] === "uploading"}
+                      className={`text-xs px-2 py-1 rounded 
                         ${
-                          uploadingStatus[short.id] === "success"
-                            ? "bg-green-500/20 text-green-500"
+                          uploadingStatus[short.id] === "uploading"
+                            ? "bg-gray-500 text-gray-300 cursor-not-allowed"
+                            : uploadingStatus[short.id] === "success"
+                            ? "bg-green-500/80 text-white"
                             : uploadingStatus[short.id] === "error"
-                            ? "bg-red-500/20 text-red-400"
-                            : "bg-red-600/80 text-white hover:bg-red-600"
+                            ? "bg-red-500/80 text-white"
+                            : "bg-blue-500/80 text-white hover:bg-blue-600/80"
                         }`}
                     >
-                      {uploadingStatus[short.id] === "uploading" ? (
-                        <>
-                          <div className="h-2 w-2 rounded-full border-2 border-white border-t-transparent animate-spin mr-1"></div>
-                          Uploading...
-                        </>
-                      ) : uploadingStatus[short.id] === "success" ? (
-                        "Uploaded to YouTube"
-                      ) : uploadingStatus[short.id] === "error" ? (
-                        "Upload Failed"
-                      ) : (
-                        "Upload to YouTube"
-                      )}
+                      {uploadingStatus[short.id] === "uploading"
+                        ? "Uploading..."
+                        : uploadingStatus[short.id] === "success"
+                        ? "Uploaded to YouTube"
+                        : uploadingStatus[short.id] === "error"
+                        ? "Upload Failed"
+                        : "Upload to YouTube"}
                     </button>
                   </div>
 
-                  {/* Display YouTube link when upload is successful */}
+                  {/* Display YouTube link if available */}
                   {uploadingStatus[short.id] === "success" &&
-                    uploadResults[short.id] && (
-                      <div className="mt-2 bg-ai-darker border border-ai-lighter rounded-md p-2">
+                    uploadResults[short.id]?.youtubeUrl && (
+                      <div className="mt-2 p-2 bg-ai-darker border border-ai-lighter rounded-md">
                         <p className="text-xs text-white mb-1">YouTube link:</p>
                         <a
                           href={uploadResults[short.id].youtubeUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-xs text-ai-accent hover:underline break-all"
+                          className="text-xs text-blue-400 hover:underline break-all"
                         >
                           {uploadResults[short.id].youtubeUrl}
                         </a>
                       </div>
                     )}
 
-                  {/* Display error message */}
+                  {/* Display error message if upload failed */}
                   {uploadingStatus[short.id] === "error" && (
-                    <div className="mt-2 bg-red-900/30 border border-red-700/30 rounded-md p-2 text-xs text-red-400">
-                      Failed to upload to YouTube. Please try again.
+                    <div className="mt-2 p-2 bg-red-900/30 border border-red-700/30 rounded-md">
+                      <p className="text-xs text-red-400">
+                        Failed to upload to YouTube. Please try again.
+                      </p>
                     </div>
                   )}
                 </div>
@@ -480,23 +550,63 @@ const VideoShorts = ({
             </div>
           );
         })}
+      </div>
 
-        {isProcessing && (
-          <div className="bg-ai-light rounded-lg overflow-hidden border border-ai-lighter animate-pulse">
-            <div className="max-w-[300px] mx-auto w-full">
-              <div className="relative aspect-[9/16] bg-ai-darker">
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="h-6 w-6 rounded-full border-2 border-ai-accent border-t-transparent animate-spin"></div>
-                </div>
+      {/* Upload dialog */}
+      <Dialog open={uploadModalOpen} onOpenChange={setUploadModalOpen}>
+        <DialogContent className="bg-ai-dark border border-ai-lighter text-white">
+          <DialogHeader>
+            <DialogTitle>Upload to YouTube</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="title">Video Title</Label>
+                <Input
+                  id="title"
+                  placeholder="Enter title for YouTube video"
+                  className="bg-ai-darker border-ai-lighter text-white"
+                />
               </div>
-              <div className="p-2">
-                <div className="h-3 bg-ai-darker rounded w-3/4"></div>
-                <div className="h-2 bg-ai-darker rounded w-1/4 mt-1"></div>
+              <div className="space-y-2">
+                <Label htmlFor="description">Video Description</Label>
+                <Textarea
+                  id="description"
+                  placeholder="Enter description for YouTube video"
+                  className="bg-ai-darker border-ai-lighter text-white h-24"
+                />
               </div>
             </div>
           </div>
-        )}
-      </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setUploadModalOpen(false)}
+              className="bg-transparent border-ai-lighter text-white hover:bg-ai-lighter"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                const titleInput = document.getElementById(
+                  "title"
+                ) as HTMLInputElement;
+                const descInput = document.getElementById(
+                  "description"
+                ) as HTMLTextAreaElement;
+                confirmUpload(
+                  titleInput?.value || "AI Generated Short",
+                  descInput?.value ||
+                    "This video was generated using AI technology."
+                );
+              }}
+              className="bg-ai-accent text-white hover:bg-ai-accent/80"
+            >
+              Upload
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

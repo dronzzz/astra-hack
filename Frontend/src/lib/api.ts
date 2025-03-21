@@ -45,7 +45,7 @@ export async function apiPost<T>(endpoint: string, data: any): Promise<T> {
  * @returns The full URL to the resource
  */
 export function getResourceUrl(path: string): string {
-    return `${API_BASE_URL}/${path}`;
+    return `${API_BASE_URL}/${path.startsWith('/') ? path.substring(1) : path}`;
 }
 
 export default {
