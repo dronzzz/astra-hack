@@ -34,34 +34,33 @@ def add_subtitles(input_video, subtitle_file, output_video, font_size=24):
     try:
         # Ensure output directory exists
         os.makedirs(os.path.dirname(output_video), exist_ok=True)
-        
-        # Use a higher bitrate and web-optimized format
+
+        # Use hardware acceleration if available and more efficient encoding settings
         cmd = [
             'ffmpeg', '-y',
             '-i', input_video,
             '-vf', f'subtitles={subtitle_file}:force_style=\'FontSize={font_size},BorderStyle=0,Outline=0,Shadow=0,Alignment=2,Bold=1\'',
             '-c:v', 'libx264',
-            '-preset', 'fast',  # Balance between speed and quality
-            '-crf', '23',       # Good quality, not too large
+            '-preset', 'ultrafast',  # Fastest encoding speed
+            '-tune', 'fastdecode',   # Optimize for faster decoding
+            '-crf', '26',            # Slightly lower quality for faster processing
             '-c:a', 'aac',
             '-b:a', '128k',
             '-pix_fmt', 'yuv420p',  # Required for browser compatibility
             '-movflags', '+faststart',  # Web optimization
             output_video
         ]
-        
-        # Execute command
-        subprocess.run(cmd, check=True)
-        
-        # Verify the output file
-        if os.path.exists(output_video) and os.path.getsize(output_video) > 10000:
-            logger.info(f"Successfully added subtitles to video: {output_video}")
-            return True
-        else:
-            logger.error(f"Failed to create valid output file: {output_video}")
+
+        # Run the command
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            logger.error(f"Error adding subtitles: {result.stderr}")
             return False
+
+        return os.path.exists(output_video)
     except Exception as e:
-        logger.exception(f"Error adding subtitles: {str(e)}")
+        logger.error(f"Error in add_subtitles: {e}")
         return False
 
 
@@ -78,7 +77,7 @@ def extract_thumbnail(video_path, thumbnail_path):
             thumbnail_path
         ]
         subprocess.run(cmd, check=True)
-        
+
         # Verify the thumbnail was created
         if os.path.exists(thumbnail_path):
             return True

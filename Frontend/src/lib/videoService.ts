@@ -6,21 +6,19 @@
  * @param youtubeLink The YouTube video URL to process
  * @returns Promise that resolves when processing is complete
  */
-export const processYoutubeLink = async (youtubeLink: string): Promise<any> => {
-  console.log(`Processing YouTube link: ${youtubeLink}`);
+export const processYoutubeLink = async (youtubeLink: string, aspectRatio: string = '9:16'): Promise<any> => {
+  console.log(`Processing YouTube link: ${youtubeLink} with aspect ratio ${aspectRatio}`);
 
   try {
-    // Send request to your backend
-    const response = await fetch('/upload', {
+    // Send request to our new Flask backend
+    const response = await fetch('/generate-short', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        youtubeUrl: youtubeLink,
-        aspectRatio: '9:16',
-        wordsPerSubtitle: 2,
-        fontSize: 36
+        youtube_url: youtubeLink, // Note the change from youtubeUrl to youtube_url
+        aspect_ratio: aspectRatio  // Note the change from aspectRatio to aspect_ratio
       })
     });
 
@@ -35,8 +33,8 @@ export const processYoutubeLink = async (youtubeLink: string): Promise<any> => {
 
     // Return the job ID for status polling
     return {
-      jobId: data.jobId,
-      status: 'processing'
+      jobId: data.job_id, // Changed from jobId to job_id to match backend
+      status: data.status || 'processing'
     };
   } catch (error) {
     console.error('Error calling backend:', error);
@@ -146,4 +144,11 @@ export const getGeneratedShorts = async () => {
       resolve(sampleShorts);
     }, 1000);
   });
+};
+
+/**
+ * Get the download URL for a processed video
+ */
+export const getDownloadUrl = (jobId: string): string => {
+  return `/download/${jobId}`;
 };

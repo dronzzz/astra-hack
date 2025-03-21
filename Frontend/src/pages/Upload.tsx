@@ -14,36 +14,50 @@ const Upload = () => {
   const [progress, setProgress] = useState(0);
   const [currentStage, setCurrentStage] = useState("");
 
-  // Poll for job status and update shorts as they become available
+  // Enhanced status polling to handle job progress
   useEffect(() => {
     if (!jobId || !isProcessing) return;
 
     const interval = setInterval(async () => {
       try {
         const response = await fetch(`/status/${jobId}`);
-        if (!response.ok) throw new Error("Failed to get status");
-
         const data = await response.json();
-        console.log("Status update:", data);
 
-        // Update progress and message
-        if (data.progress) setProgress(data.progress);
-        if (data.message) setCurrentStage(data.message);
-
-        // Check if any videos are available
-        if (data.videos && data.videos.length > 0) {
-          // Update shorts with available videos
-          setShorts(data.videos);
+        if (data.progress) {
+          setProgress(data.progress);
         }
 
-        // Check if processing is complete
+        if (data.message && typeof data.message === "string") {
+          setCurrentStage(data.message);
+        }
+
         if (data.status === "completed") {
           setIsProcessing(false);
-          setIsProcessed(true);
+
+          // If the API returns videos array, use those
+          if (data.videos && data.videos.length > 0) {
+            console.log("Setting videos from API response:", data.videos);
+            setShorts(data.videos);
+          } else {
+            // Legacy output for backward compatibility
+            console.log("Using legacy format for video data");
+            setShorts([
+              {
+                id: jobId,
+                url: `/download/${jobId}`,
+                title: `Processed Video (${data.aspect_ratio || "9:16"})`,
+                description:
+                  data.segment_info?.reasoning ||
+                  "Video processed successfully",
+                thumbnail: data.thumbnail || "",
+              },
+            ]);
+          }
+
           clearInterval(interval);
-        } else if (data.status === "error") {
+        } else if (data.status === "failed") {
           setIsProcessing(false);
-          setProcessMessage(data.message || "An error occurred");
+          setProcessMessage(data.error || "An error occurred");
           clearInterval(interval);
         }
       } catch (error) {
@@ -111,7 +125,11 @@ const Upload = () => {
                   </span>
                 )}
               </div>
-              {console.log("Passing jobId to VideoShorts:", jobId)}
+              {/* Log outside of JSX to avoid the void type error */}
+              {(() => {
+                console.log("Passing jobId to VideoShorts:", jobId);
+                return null;
+              })()}
               <VideoShorts
                 shorts={shorts}
                 isProcessing={isProcessing}

@@ -30,6 +30,13 @@ const VideoShorts = ({
   const [showLanguageSelector, setShowLanguageSelector] = useState<{
     [key: string]: boolean;
   }>({});
+  // YouTube upload states
+  const [uploadingStatus, setUploadingStatus] = useState<{
+    [key: string]: string;
+  }>({});
+  const [uploadResults, setUploadResults] = useState<{ [key: string]: any }>(
+    {}
+  );
 
   // Group videos by their original segment ID
   const groupedShorts = shorts.reduce(
@@ -181,8 +188,9 @@ const VideoShorts = ({
               language: language,
             };
 
-            // Add this dubbed video to your list of shorts
-            setShorts((prev) => [...prev, dubbedVideo]);
+            // NOTE: We can't add to shorts directly since setShorts is not available here
+            // This would require the parent component to pass setShorts as a prop
+            // setShorts((prev) => [...prev, dubbedVideo]);
 
             // Show a simple console log instead of toast
             console.log(`Dubbing complete for ${segmentId} in ${language}`);
@@ -202,6 +210,65 @@ const VideoShorts = ({
     } catch (error) {
       console.error("Error checking dubbing status:", error);
       setDubbingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
+    }
+  };
+
+  const handleUploadToYouTube = async (segmentId: string) => {
+    if (!jobId) {
+      console.error("No job ID provided");
+      return;
+    }
+
+    console.log(`Uploading segment ${segmentId} to YouTube`);
+    setUploadingStatus((prev) => ({ ...prev, [segmentId]: "uploading" }));
+
+    const segment = shorts.find((s) => s.id === segmentId);
+    if (!segment) {
+      setUploadingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
+      return;
+    }
+
+    const requestData = {
+      jobId,
+      segmentId,
+      title: segment.title || `Short Video ${segmentId}`,
+      description: segment.description || "AI-generated short video",
+      tags: ["shorts", "ai-generated", "video"],
+      privacyStatus: "public",
+    };
+
+    try {
+      // Make sure we're using the API endpoint through the Vite proxy
+      const response = await fetch("/api/youtube-upload", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestData),
+      });
+
+      // First check if response is ok before trying to parse JSON
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Upload failed:", response.status, errorText);
+        setUploadingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
+        return;
+      }
+
+      const data = await response.json();
+
+      console.log("Upload succeeded:", data);
+      setUploadingStatus((prev) => ({ ...prev, [segmentId]: "success" }));
+      setUploadResults((prev) => ({
+        ...prev,
+        [segmentId]: {
+          videoId: data.videoId,
+          youtubeUrl: data.youtubeUrl,
+        },
+      }));
+    } catch (error) {
+      console.error("Error uploading to YouTube:", error);
+      setUploadingStatus((prev) => ({ ...prev, [segmentId]: "error" }));
     }
   };
 
@@ -243,14 +310,23 @@ const VideoShorts = ({
                       </button>
                     </div>
                   ) : (
-                    <video
-                      src={short.url}
-                      poster={short.thumbnailUrl}
-                      controls
-                      playsInline
-                      className="w-full h-full object-cover"
-                      onError={() => handleVideoError(short.id)}
-                    />
+                    // Log outside of the JSX to avoid the void type error
+                    (() => {
+                      console.log(
+                        `Loading video for ${short.id} from ${short.url}`
+                      );
+                      return (
+                        <video
+                          src={short.url}
+                          poster={short.thumbnailUrl}
+                          controls
+                          playsInline
+                          autoPlay={false}
+                          onError={() => handleVideoError(short.id)}
+                          className="w-full h-full object-contain"
+                        />
+                      );
+                    })()
                   )}
                 </div>
 
@@ -336,13 +412,73 @@ const VideoShorts = ({
                       Download
                     </a>
 
+                    {/* Language dubbing button */}
                     <button
                       onClick={() => toggleLanguageSelector(short.id)}
-                      className="text-xs px-2 py-1 bg-ai-lighter text-white rounded hover:bg-ai-light"
+                      className={`text-xs px-2 py-1 rounded bg-ai-accent/20 text-ai-accent ${
+                        dubbingStatus[short.id] === "success"
+                          ? "bg-green-500/20 text-green-500"
+                          : ""
+                      }`}
                     >
-                      {showLanguageSelector[short.id] ? "Cancel" : "Translate"}
+                      {dubbingStatus[short.id] === "success"
+                        ? "Dub Created"
+                        : "Dub to Other Languages"}
+                    </button>
+
+                    {/* YouTube upload button */}
+                    <button
+                      onClick={() => handleUploadToYouTube(short.id)}
+                      disabled={
+                        uploadingStatus[short.id] === "uploading" ||
+                        uploadingStatus[short.id] === "success"
+                      }
+                      className={`text-xs px-2 py-1 rounded flex items-center gap-1
+                        ${
+                          uploadingStatus[short.id] === "success"
+                            ? "bg-green-500/20 text-green-500"
+                            : uploadingStatus[short.id] === "error"
+                            ? "bg-red-500/20 text-red-400"
+                            : "bg-red-600/80 text-white hover:bg-red-600"
+                        }`}
+                    >
+                      {uploadingStatus[short.id] === "uploading" ? (
+                        <>
+                          <div className="h-2 w-2 rounded-full border-2 border-white border-t-transparent animate-spin mr-1"></div>
+                          Uploading...
+                        </>
+                      ) : uploadingStatus[short.id] === "success" ? (
+                        "Uploaded to YouTube"
+                      ) : uploadingStatus[short.id] === "error" ? (
+                        "Upload Failed"
+                      ) : (
+                        "Upload to YouTube"
+                      )}
                     </button>
                   </div>
+
+                  {/* Display YouTube link when upload is successful */}
+                  {uploadingStatus[short.id] === "success" &&
+                    uploadResults[short.id] && (
+                      <div className="mt-2 bg-ai-darker border border-ai-lighter rounded-md p-2">
+                        <p className="text-xs text-white mb-1">YouTube link:</p>
+                        <a
+                          href={uploadResults[short.id].youtubeUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-ai-accent hover:underline break-all"
+                        >
+                          {uploadResults[short.id].youtubeUrl}
+                        </a>
+                      </div>
+                    )}
+
+                  {/* Display error message */}
+                  {uploadingStatus[short.id] === "error" && (
+                    <div className="mt-2 bg-red-900/30 border border-red-700/30 rounded-md p-2 text-xs text-red-400">
+                      Failed to upload to YouTube. Please try again.
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

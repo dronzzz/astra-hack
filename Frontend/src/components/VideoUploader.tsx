@@ -64,17 +64,15 @@ const VideoUploader = ({
     try {
       console.log("Processing YouTube link:", youtubeLink);
 
-      // Make API call to process the YouTube link
-      const response = await fetch("/api/process-youtube", {
+      // Make API call to process the YouTube link with the new endpoint
+      const response = await fetch("/generate-short", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          youtubeUrl: youtubeLink,
-          aspectRatio: "9:16",
-          wordsPerSubtitle: 2,
-          fontSize: 12,
+          youtube_url: youtubeLink, // Changed from youtubeUrl to youtube_url
+          aspect_ratio: "9:16", // Changed from aspectRatio to aspect_ratio
         }),
       });
 
@@ -89,11 +87,12 @@ const VideoUploader = ({
       const data = await response.json();
       console.log("Process result:", data);
 
-      if (data.jobId) {
+      if (data.job_id) {
+        // Changed from jobId to job_id
         // Set the jobId so we can show progress
-        onUploadComplete(true, "Processing started", [{ jobId: data.jobId }]);
+        onUploadComplete(true, "Processing started", [{ jobId: data.job_id }]);
         // Start polling for status
-        startStatusPolling(data.jobId);
+        startStatusPolling(data.job_id);
       } else {
         throw new Error("No job ID returned from server");
       }
@@ -134,12 +133,26 @@ const VideoUploader = ({
         if (status.status === "completed") {
           clearInterval(interval);
           setIsProcessing(false);
-          onUploadComplete(
-            true,
-            "Video processing completed",
-            status.videos || []
-          );
-        } else if (status.status === "error") {
+
+          // Check if the response has video data
+          if (status.videos && status.videos.length > 0) {
+            console.log("Video data received:", status.videos);
+            // Use the actual video data from the API
+            onUploadComplete(true, "Video processing completed", status.videos);
+          } else {
+            // Fallback for backward compatibility
+            onUploadComplete(true, "Video processing completed", [
+              {
+                id: jobId,
+                url: `/download/${jobId}`,
+                title: `Processed Video (${status.aspect_ratio || "9:16"})`,
+                description:
+                  status.segment_info?.reason || "Video processed successfully",
+                thumbnail: status.thumbnail ? `${status.thumbnail}` : "",
+              },
+            ]);
+          }
+        } else if (status.status === "failed") {
           clearInterval(interval);
           setIsProcessing(false);
           onUploadComplete(

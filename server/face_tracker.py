@@ -7,7 +7,8 @@ import subprocess
 
 def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16", segment_id=1, total_segments=1):
     """Track faces using MediaPipe with improved smoothing for stable tracking"""
-    print(f"[Segment {segment_id}/{total_segments}] Processing with face tracking: {input_file}")
+    print(
+        f"[Segment {segment_id}/{total_segments}] Processing with face tracking: {input_file}")
 
     # Initialize MediaPipe Face Detection
     mp_face_detection = mp.solutions.face_detection
@@ -17,7 +18,8 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16", 
     # Open the video
     cap = cv2.VideoCapture(input_file)
     if not cap.isOpened():
-        print(f"[Segment {segment_id}] Error: Could not open video {input_file}")
+        print(
+            f"[Segment {segment_id}] Error: Could not open video {input_file}")
         return False
 
     # Get video properties
@@ -49,114 +51,141 @@ def track_face_and_crop_mediapipe(input_file, output_file, aspect_ratio="9:16", 
 
     # Create a unique temp file for this segment
     temp_video = f"temp_tracked_video_{segment_id}.mp4"
+
+    # Create a video writer
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(temp_video, fourcc, fps,
                           (target_width, target_height))
 
-    # Initialize smooth tracking with a longer history window for even smoother movement
-    # Increased history length for smoother motion
-    position_history_x = collections.deque(maxlen=45)
-    position_history_y = collections.deque(maxlen=45)
+    # Skip frames: only process every nth frame to speed up (adjust based on fps)
+    # For higher fps videos we can skip more frames
+    # Process ~10 frames per second for tracking
+    skip_frames = max(1, int(fps // 10))
 
-    # Fill position history with initial center
-    for _ in range(45):
-        position_history_x.append(width // 2)
-        position_history_y.append(height // 2)
+    # Initialize a deque for tracking centerpoints
+    # Store last 10 center points for smoothing
+    center_points = collections.deque(maxlen=10)
+    last_detected_frame = -999  # Track when we last detected a face
+    has_detection = False  # Track if we ever found a face
+    default_center_x, default_center_y = width // 2, height // 2  # Default center
+    scale_factor = 0.5  # Process at half resolution for tracking only
 
-    # Process frames
-    frame_number = 0
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
+    try:
+        frame_index = 0
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        frame_number += 1
-        if frame_number % (fps * 5) == 0:  # Status update every 5 seconds
+            frame_for_tracking = None
+            tracking_result = None
+            current_center_x, current_center_y = default_center_x, default_center_y
+
+            # Only run face detection on certain frames to speed up processing
+            if frame_index % skip_frames == 0:
+                # Resize frame for faster processing (only for detection)
+                frame_for_tracking = cv2.resize(
+                    frame, (int(width * scale_factor), int(height * scale_factor)))
+
+                # Convert to RGB for MediaPipe
+                frame_for_tracking = cv2.cvtColor(
+                    frame_for_tracking, cv2.COLOR_BGR2RGB)
+                tracking_result = face_detection.process(frame_for_tracking)
+
+                # Process tracking results
+                if tracking_result.detections:
+                    has_detection = True
+                    last_detected_frame = frame_index
+
+                    # Get the first face detected (highest confidence)
+                    detection = tracking_result.detections[0]
+                    face_bbox = detection.location_data.relative_bounding_box
+
+                    # Convert relative coordinates to actual pixel values (accounting for scale_factor)
+                    relative_x = face_bbox.xmin + face_bbox.width / 2
+                    relative_y = face_bbox.ymin + face_bbox.height / 2
+
+                    # Convert back to original image coordinates
+                    current_center_x = int(relative_x * width)
+                    current_center_y = int(relative_y * height)
+
+                    # Add to our smoothing deque
+                    center_points.append((current_center_x, current_center_y))
+
+            # If we haven't found a face in too many frames, use the default center
+            if frame_index - last_detected_frame > 30 * fps:  # If no face for 30 seconds
+                center_points.clear()  # Clear history
+                center_points.append((default_center_x, default_center_y))
+
+            # Use the average of recent points for smooth tracking
+            if center_points:
+                avg_x = sum(p[0] for p in center_points) // len(center_points)
+                avg_y = sum(p[1] for p in center_points) // len(center_points)
+            else:
+                avg_x, avg_y = default_center_x, default_center_y
+
+            # Calculate crop region
+            x1 = max(0, avg_x - target_width // 2)
+            # Ensure we don't go beyond the right edge
+            if x1 + target_width > width:
+                x1 = max(0, width - target_width)
+
+            y1 = max(0, avg_y - target_height // 2)
+            # Ensure we don't go beyond the bottom edge
+            if y1 + target_height > height:
+                y1 = max(0, height - target_height)
+
+            # Crop and write
+            cropped = frame[y1:y1+target_height, x1:x1+target_width]
+
+            # Handle edge cases where the crop might not have the expected dimensions
+            if cropped.shape[1] != target_width or cropped.shape[0] != target_height:
+                # Resize to expected dimensions
+                cropped = cv2.resize(cropped, (target_width, target_height))
+
+            out.write(cropped)
+            frame_index += 1
+
+            # Print progress
+            if frame_index % 100 == 0:
+                progress = min(100, int(100 * frame_index / frame_count))
+                print(
+                    f"[Segment {segment_id}] Processing: {progress}% complete", end="\r")
+
+        print(
+            f"[Segment {segment_id}] Processed {frame_index} frames, writing video...")
+
+        # Release resources
+        cap.release()
+        out.release()
+
+        # If we didn't find any faces, just use center crop
+        if not has_detection:
             print(
-                f"[Segment {segment_id}] Processing frame {frame_number}/{frame_count} ({frame_number/frame_count*100:.1f}%)")
+                f"[Segment {segment_id}] No faces detected, using center crop")
 
-        # Convert frame color for MediaPipe
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Use ffmpeg to convert the temp video to the final output with proper encoding
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', temp_video,
+            '-c:v', 'libx264',
+            '-preset', 'fast',
+            '-crf', '23',
+            '-pix_fmt', 'yuv420p',  # Required for compatibility
+            output_file
+        ]
 
-        # Process with MediaPipe
-        results = face_detection.process(rgb_frame)
+        subprocess.run(cmd)
 
-        if results.detections:
-            # Get the most prominent face
-            detection = results.detections[0]
-
-            # Get bounding box
-            bbox = detection.location_data.relative_bounding_box
-
-            # Convert relative coordinates to absolute
-            x = int(bbox.xmin * width)
-            y = int(bbox.ymin * height)
-            w = int(bbox.width * width)
-            h = int(bbox.height * height)
-
-            # Calculate center of face
-            face_x_center = x + w // 2
-            face_y_center = y + h // 2
-
-            # Add to position history
-            position_history_x.append(face_x_center)
-            position_history_y.append(face_y_center)
-
-        # Calculate smooth position using weighted average
-        # This gives more weight to recent positions but still maintains smoothness
-        weights = list(range(1, len(position_history_x) + 1))
-        total_weight = sum(weights)
-
-        x_center = int(
-            sum(x * w for x, w in zip(position_history_x, weights)) / total_weight)
-        y_center = int(
-            sum(y * w for y, w in zip(position_history_y, weights)) / total_weight)
-
-        # Calculate crop region (center on smoothed face position)
-        x_start = max(0, min(x_center - target_width //
-                      2, width - target_width))
-        y_start = max(0, min(y_center - target_height //
-                      2, height - target_height))
-
-        # Crop the frame
+        # Clean up temp file
         try:
-            cropped_frame = frame[y_start:y_start +
-                                  target_height, x_start:x_start + target_width]
-            out.write(cropped_frame)
-        except Exception as e:
-            print(f"[Segment {segment_id}] Error cropping frame: {e}")
-            # Fallback to center crop
-            x_start = (width - target_width) // 2
-            y_start = (height - target_height) // 2
-            cropped_frame = frame[y_start:y_start +
-                                  target_height, x_start:x_start + target_width]
-            out.write(cropped_frame)
+            os.remove(temp_video)
+        except:
+            pass
 
-    # Release OpenCV resources
-    cap.release()
-    out.release()
-    face_detection.close()
+        print(f"[Segment {segment_id}] Face tracking completed")
+        return True
 
-    # Now combine the video with the original audio using ffmpeg
-    print(f"[Segment {segment_id}] Merging tracked video with original audio...")
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', temp_video,
-        '-i', input_file,
-        '-c:v', 'libx264',    # Use libx264 for better quality
-        '-preset', 'medium',  # Better quality preset
-        '-crf', '18',         # High quality (lower is better)
-        '-vsync', 'cfr',      # Constant frame rate for better sync
-        '-map', '0:v:0',
-        '-map', '1:a:0',
-        '-shortest',
-        output_file
-    ]
-    subprocess.run(cmd, check=True)
-
-    # Clean up temp file
-    if os.path.exists(temp_video):
-        os.remove(temp_video)
-
-    print(f"[Segment {segment_id}] Face tracking with audio completed: {output_file}")
-    return True
+    except Exception as e:
+        print(f"[Segment {segment_id}] Error in face tracking: {e}")
+        return False

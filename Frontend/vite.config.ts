@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => ({
         secure: false,
         rewrite: (path) => path,
       },
-      '/shorts': {
+      '/generate-short': {
         target: 'http://localhost:5050',
         changeOrigin: true,
       },
@@ -34,6 +34,10 @@ export default defineConfig(({ mode }) => ({
       '/status': {
         target: 'http://localhost:5050',
         changeOrigin: true,
+      },
+      '/download': {
+        target: 'http://localhost:5050',
+        changeOrigin: true
       }
     }
   },

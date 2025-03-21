@@ -18,19 +18,26 @@ const YouTubeProcessor = () => {
 
         const interval = setInterval(async () => {
             try {
+                // Updated to use the new API endpoint
                 const response = await axios.get(`/status/${jobId}`);
                 setStatus(response.data);
 
                 // Update videos when processing is complete
-                if (response.data.status === 'completed' && response.data.videos) {
-                    setVideos(response.data.videos);
+                if (response.data.status === 'completed' && response.data.output_file) {
+                    // Create a download link for the processed video
+                    setVideos([{
+                        url: `/download/${jobId}`,
+                        thumbnail: response.data.thumbnail || '',
+                        title: `Processed video (${aspectRatio})`,
+                        description: response.data.segment_info?.reasoning || 'Video processed successfully'
+                    }]);
                     clearInterval(interval);
                     setIsLoading(false);
                 }
 
                 // Handle errors
-                if (response.data.status === 'error') {
-                    setError(response.data.message);
+                if (response.data.status === 'failed') {
+                    setError(response.data.error || 'Processing failed');
                     clearInterval(interval);
                     setIsLoading(false);
                 }
@@ -42,7 +49,7 @@ const YouTubeProcessor = () => {
         }, 2000);
 
         return () => clearInterval(interval);
-    }, [jobId]);
+    }, [jobId, aspectRatio]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -51,14 +58,14 @@ const YouTubeProcessor = () => {
         setVideos([]);
 
         try {
-            const response = await axios.post('/api/process-youtube', {
-                youtubeUrl,
-                aspectRatio,
-                wordsPerSubtitle,
-                fontSize
+            // Updated to use the new API endpoint and parameter names
+            const response = await axios.post('/generate-short', {
+                youtube_url: youtubeUrl,     // Changed from youtubeUrl to youtube_url
+                aspect_ratio: aspectRatio     // Changed from aspectRatio to aspect_ratio
+                // Removed unused parameters: wordsPerSubtitle, fontSize
             });
 
-            setJobId(response.data.jobId);
+            setJobId(response.data.job_id);   // Changed from jobId to job_id
         } catch (err) {
             setError('Failed to start processing');
             setIsLoading(false);
@@ -95,48 +102,21 @@ const YouTubeProcessor = () => {
                     </select>
                 </div>
 
-                <div className="form-group">
-                    <label htmlFor="wordsPerSubtitle">Words Per Subtitle:</label>
-                    <input
-                        type="number"
-                        id="wordsPerSubtitle"
-                        value={wordsPerSubtitle}
-                        onChange={(e) => setWordsPerSubtitle(parseInt(e.target.value))}
-                        min="1"
-                        max="10"
-                    />
-                </div>
-
-                <div className="form-group">
-                    <label htmlFor="fontSize">Font Size:</label>
-                    <input
-                        type="number"
-                        id="fontSize"
-                        value={fontSize}
-                        onChange={(e) => setFontSize(parseInt(e.target.value))}
-                        min="12"
-                        max="72"
-                    />
-                </div>
-
                 <button type="submit" disabled={isLoading}>
-                    {isLoading ? 'Processing...' : 'Generate Shorts'}
+                    {isLoading ? 'Processing...' : 'Generate Short'}
                 </button>
             </form>
 
-            {error && (
-                <div className="error-message">
-                    <p>{error}</p>
-                </div>
-            )}
+            {error && <div className="error">{error}</div>}
 
-            {status && status.status === 'processing' && (
-                <div className="processing-status">
-                    <h3>Processing: {status.progress}%</h3>
-                    <p>{status.message}</p>
+            {status && (
+                <div className="status">
+                    <h3>Processing Status</h3>
+                    <p>Status: {status.status}</p>
+                    <p>Progress: {status.progress}%</p>
                     <div className="progress-bar">
                         <div
-                            className="progress-fill"
+                            className="progress"
                             style={{ width: `${status.progress}%` }}
                         ></div>
                     </div>
@@ -144,18 +124,23 @@ const YouTubeProcessor = () => {
             )}
 
             {videos.length > 0 && (
-                <div className="generated-videos">
-                    <h3>Generated Shorts</h3>
-                    <div className="video-grid">
+                <div className="videos">
+                    <h3>Generated Videos</h3>
+                    <div className="video-list">
                         {videos.map((video, index) => (
-                            <div key={index} className="video-item">
-                                <h4>Short {index + 1}</h4>
-                                <p><strong>Reason:</strong> {video.segment.reason}</p>
-                                <video
-                                    controls
-                                    src={video.url}
-                                    style={{ width: '100%', maxWidth: '400px' }}
-                                />
+                            <div className="video-item" key={index}>
+                                {video.thumbnail && (
+                                    <img src={video.thumbnail} alt={video.title} />
+                                )}
+                                <h4>{video.title}</h4>
+                                <p>{video.description}</p>
+                                <a
+                                    href={video.url}
+                                    download
+                                    className="download-btn"
+                                >
+                                    Download Video
+                                </a>
                             </div>
                         ))}
                     </div>
