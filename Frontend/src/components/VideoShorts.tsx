@@ -11,6 +11,7 @@ import { Button } from "./ui/button";
 import { Label } from "./ui/label";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
+import DubbingService, { VideoSegment } from "./DubbingService";
 
 // Define language options
 const LANGUAGE_OPTIONS = [
@@ -44,14 +45,8 @@ const VideoShorts = ({
   const [videoErrors, setVideoErrors] = useState<{ [key: string]: boolean }>(
     {}
   );
-  const [dubbingStatus, setDubbingStatus] = useState<
-    Record<string, Record<string, string>>
-  >({});
-  const [currentLanguage, setCurrentLanguage] = useState<
-    Record<string, string>
-  >({});
-  const [showLanguageSelector, setShowLanguageSelector] = useState<{
-    [key: string]: boolean;
+  const [dubbedVideos, setDubbedVideos] = useState<{
+    [segmentId: string]: { [language: string]: string };
   }>({});
   // YouTube upload states
   const [uploadingStatus, setUploadingStatus] = useState<{
@@ -62,9 +57,6 @@ const VideoShorts = ({
   );
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [currentSegmentId, setCurrentSegmentId] = useState("");
-  const [selectedLanguages, setSelectedLanguages] = useState<
-    Record<string, string>
-  >({});
 
   // Group videos by their original segment ID
   const groupedShorts = shorts.reduce(
@@ -94,150 +86,19 @@ const VideoShorts = ({
     setVideoErrors((prev) => ({ ...prev, [id]: true }));
   };
 
-  const toggleLanguageSelector = (id: string) => {
-    setShowLanguageSelector((prev) => ({
-      ...prev,
-      [id]: !prev[id],
-    }));
-  };
-
-  const handleLanguageChange = async (segmentId: string, language: string) => {
-    if (!jobId) {
-      console.error("No jobId provided for dubbing");
-      return;
-    }
-
-    // Skip if already dubbed in this language or currently dubbing
-    if (
-      dubbingStatus[segmentId]?.[language] === "processing" ||
-      dubbingStatus[segmentId]?.[language] === "completed"
-    ) {
-      // Just update the current language
-      setCurrentLanguage((prev) => ({
-        ...prev,
-        [segmentId]: language,
-      }));
-      return;
-    }
-
-    // Update dubbing status
-    setDubbingStatus((prev) => ({
+  const handleDubbingComplete = (
+    segmentId: string,
+    language: string,
+    url: string
+  ) => {
+    // Update the dubbed videos state
+    setDubbedVideos((prev) => ({
       ...prev,
       [segmentId]: {
         ...(prev[segmentId] || {}),
-        [language]: "processing",
+        [language]: url,
       },
     }));
-
-    // Set current language
-    setCurrentLanguage((prev) => ({
-      ...prev,
-      [segmentId]: language,
-    }));
-
-    try {
-      // Get the language code (remove emoji)
-      const languageCode = language.split(" ")[1].toLowerCase();
-
-      const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5050";
-      const response = await fetch(`${API_URL}/api/dub-video`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          jobId,
-          segmentId,
-          language: languageCode,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Dubbing failed:", response.status, errorText);
-        setDubbingStatus((prev) => ({
-          ...prev,
-          [segmentId]: {
-            ...(prev[segmentId] || {}),
-            [language]: "failed",
-          },
-        }));
-        return;
-      }
-
-      const data = await response.json();
-      console.log("Dubbing request succeeded:", data);
-
-      // Start polling for dubbing status
-      pollDubbingStatus(jobId, segmentId, language);
-    } catch (error) {
-      console.error("Error requesting dubbing:", error);
-      setDubbingStatus((prev) => ({
-        ...prev,
-        [segmentId]: {
-          ...(prev[segmentId] || {}),
-          [language]: "failed",
-        },
-      }));
-    }
-  };
-
-  // Add polling function for dubbing status
-  const pollDubbingStatus = (
-    jobId: string,
-    segmentId: string,
-    language: string
-  ) => {
-    const interval = setInterval(async () => {
-      try {
-        const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5050";
-        const response = await fetch(`${API_URL}/status/${jobId}`);
-        const status = await response.json();
-
-        // Find the segment and check dubbing status
-        const videos = status.videos || [];
-        const segment = videos.find((v: any) => v.id === segmentId);
-
-        if (segment && segment.dubbing) {
-          const languageCode = language.split(" ")[1].toLowerCase();
-          const dubbingInfo = segment.dubbing[languageCode];
-
-          if (dubbingInfo) {
-            if (dubbingInfo.status === "completed") {
-              // Dubbing completed
-              clearInterval(interval);
-              setDubbingStatus((prev) => ({
-                ...prev,
-                [segmentId]: {
-                  ...(prev[segmentId] || {}),
-                  [language]: "completed",
-                },
-              }));
-
-              // Instead, log the information
-              console.log(
-                `Dubbed video available for ${segmentId} in ${language}: ${dubbingInfo.url}`
-              );
-            } else if (dubbingInfo.status === "failed") {
-              // Dubbing failed
-              clearInterval(interval);
-              setDubbingStatus((prev) => ({
-                ...prev,
-                [segmentId]: {
-                  ...(prev[segmentId] || {}),
-                  [language]: "failed",
-                },
-              }));
-            }
-          }
-        }
-      } catch (error) {
-        console.error("Error polling dubbing status:", error);
-      }
-    }, 5000); // Poll every 5 seconds
-
-    // Store the interval ID for cleanup
-    return interval;
   };
 
   const handleUploadToYouTube = async (segmentId: string) => {
@@ -333,6 +194,15 @@ const VideoShorts = ({
             groupedShorts[short.id]?.filter((s) => s.id !== short.id) || [];
           const hasTranslations = translations.length > 0;
 
+          // Prepare segment for DubbingService
+          const segment: VideoSegment = {
+            id: short.id,
+            url: short.url,
+            thumbnailUrl: short.thumbnailUrl,
+            title: short.title,
+            dubbedVideos: dubbedVideos[short.id],
+          };
+
           return (
             <div
               key={short.id}
@@ -365,19 +235,7 @@ const VideoShorts = ({
                       );
                       return (
                         <video
-                          src={
-                            selectedLanguages[short.id] &&
-                            short.dubbedVideos?.[selectedLanguages[short.id]] &&
-                            dubbingStatus[short.id]?.[
-                              selectedLanguages[short.id]
-                            ] === "completed"
-                              ? getResourceUrl(
-                                  short.dubbedVideos[
-                                    selectedLanguages[short.id]
-                                  ]
-                                )
-                              : getResourceUrl(short.url)
-                          }
+                          src={getResourceUrl(short.url)}
                           poster={
                             short.thumbnailUrl
                               ? getResourceUrl(short.thumbnailUrl)
@@ -402,72 +260,25 @@ const VideoShorts = ({
                     {short.duration}
                   </p>
 
-                  {/* Translations selector and status */}
-                  <div className="mt-2 space-y-2">
-                    {/* Language selector dropdown */}
-                    {showLanguageSelector[short.id] && (
-                      <div className="bg-ai-darker border border-ai-lighter rounded-md p-2 animate-in fade-in zoom-in duration-200">
-                        <p className="text-xs text-white mb-1">
-                          Select language:
-                        </p>
-                        <div className="grid grid-cols-2 gap-1">
-                          {LANGUAGE_OPTIONS.map((lang) => (
-                            <button
-                              key={lang.value}
-                              onClick={() =>
-                                handleLanguageChange(short.id, lang.label)
-                              }
-                              className={`text-xs px-2 py-1 rounded 
-                                ${
-                                  lang.value === "EN"
-                                    ? "bg-ai-lighter text-ai-muted cursor-not-allowed"
-                                    : "bg-ai-accent text-white hover:bg-ai-accent/80"
-                                }`}
-                              disabled={lang.value === "EN"}
-                            >
-                              {lang.label}
-                            </button>
-                          ))}
-                        </div>
+                  {/* Display available translations */}
+                  {hasTranslations && (
+                    <div className="mt-2 bg-ai-darker border border-ai-lighter rounded-md p-2">
+                      <p className="text-xs text-white mb-1">
+                        Available languages:
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        {translations.map((translation) => (
+                          <a
+                            key={translation.id}
+                            href={getResourceUrl(translation.url)}
+                            className="text-xs px-2 py-1 bg-ai-accent/20 text-ai-accent rounded hover:bg-ai-accent/30"
+                          >
+                            {translation.language || "Unknown"}
+                          </a>
+                        ))}
                       </div>
-                    )}
-
-                    {/* Dubbing status */}
-                    {dubbingStatus[short.id]?.[selectedLanguages[short.id]] ===
-                      "processing" && (
-                      <div className="bg-ai-darker border border-ai-lighter rounded-md p-2 text-xs text-white flex items-center">
-                        <div className="h-3 w-3 rounded-full border-2 border-ai-accent border-t-transparent animate-spin mr-2"></div>
-                        Creating dubbed version...
-                      </div>
-                    )}
-
-                    {dubbingStatus[short.id]?.[selectedLanguages[short.id]] ===
-                      "failed" && (
-                      <div className="bg-red-900/30 border border-red-700/30 rounded-md p-2 text-xs text-red-400">
-                        Error creating dubbed version. Please try again.
-                      </div>
-                    )}
-
-                    {/* Available translations */}
-                    {hasTranslations && (
-                      <div className="bg-ai-darker border border-ai-lighter rounded-md p-2">
-                        <p className="text-xs text-white mb-1">
-                          Available languages:
-                        </p>
-                        <div className="flex flex-wrap gap-1">
-                          {translations.map((translation) => (
-                            <a
-                              key={translation.id}
-                              href={getResourceUrl(translation.url)}
-                              className="text-xs px-2 py-1 bg-ai-accent/20 text-ai-accent rounded hover:bg-ai-accent/30"
-                            >
-                              {translation.language || "Unknown"}
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
 
                   <div className="flex justify-between items-center mt-2">
                     <a
@@ -477,24 +288,6 @@ const VideoShorts = ({
                     >
                       Download
                     </a>
-
-                    {/* Language dubbing button */}
-                    <button
-                      onClick={() => toggleLanguageSelector(short.id)}
-                      className={`text-xs px-2 py-1 rounded bg-ai-accent/20 text-ai-accent ${
-                        dubbingStatus[short.id]?.[
-                          selectedLanguages[short.id]
-                        ] === "completed"
-                          ? "bg-green-500/20 text-green-500"
-                          : ""
-                      }`}
-                    >
-                      {dubbingStatus[short.id]?.[
-                        selectedLanguages[short.id]
-                      ] === "completed"
-                        ? "Dubbed Version Available"
-                        : "Translate"}
-                    </button>
 
                     {/* YouTube upload button */}
                     <button
@@ -519,6 +312,15 @@ const VideoShorts = ({
                         ? "Upload Failed"
                         : "Upload to YouTube"}
                     </button>
+                  </div>
+
+                  {/* New DubbingService component */}
+                  <div className="mt-2">
+                    <DubbingService
+                      segment={segment}
+                      jobId={jobId}
+                      onDubbingComplete={handleDubbingComplete}
+                    />
                   </div>
 
                   {/* Display YouTube link if available */}
