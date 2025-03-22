@@ -11,7 +11,9 @@ import { Button } from "./ui/button";
 import { Label } from "./ui/label";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
-import DubbingService, { VideoSegment } from "./DubbingService";
+import DubbingPanel, {
+  LANGUAGE_OPTIONS as DUBBING_LANGUAGE_OPTIONS,
+} from "./DubbingPanel";
 
 // Define language options
 const LANGUAGE_OPTIONS = [
@@ -46,7 +48,7 @@ const VideoShorts = ({
     {}
   );
   const [dubbedVideos, setDubbedVideos] = useState<{
-    [segmentId: string]: { [language: string]: string };
+    [videoId: string]: { [language: string]: string };
   }>({});
   // YouTube upload states
   const [uploadingStatus, setUploadingStatus] = useState<{
@@ -57,6 +59,9 @@ const VideoShorts = ({
   );
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [currentSegmentId, setCurrentSegmentId] = useState("");
+  const [activeVideoUrl, setActiveVideoUrl] = useState<{
+    [videoId: string]: string;
+  }>({});
 
   // Group videos by their original segment ID
   const groupedShorts = shorts.reduce(
@@ -87,17 +92,44 @@ const VideoShorts = ({
   };
 
   const handleDubbingComplete = (
-    segmentId: string,
+    videoId: string,
     language: string,
     url: string
   ) => {
-    // Update the dubbed videos state
+    console.log(
+      `Dubbing complete for ${videoId} in language ${language}: ${url}`
+    );
+
+    // If the URL contains video ID and language info but explicit values weren't provided,
+    // try to extract them from the URL
+    let finalVideoId = videoId;
+    let finalLanguage = language;
+
+    if (url && (!videoId || !language)) {
+      // Extract from URL format like "/dubbed/short-098_spanish_dubbed.mp4"
+      const match = url.match(/\/dubbed\/([^_]+)_([^_]+)_dubbed\.mp4/);
+      if (match && match.length >= 3) {
+        finalVideoId = match[1];
+        finalLanguage = match[2];
+        console.log(
+          `Extracted from URL - videoId: ${finalVideoId}, language: ${finalLanguage}`
+        );
+      }
+    }
+
+    // Store the dubbed video URL
     setDubbedVideos((prev) => ({
       ...prev,
-      [segmentId]: {
-        ...(prev[segmentId] || {}),
-        [language]: url,
+      [finalVideoId]: {
+        ...(prev[finalVideoId] || {}),
+        [finalLanguage]: url,
       },
+    }));
+
+    // Update the active video URL for this video
+    setActiveVideoUrl((prev) => ({
+      ...prev,
+      [finalVideoId]: url,
     }));
   };
 
@@ -194,14 +226,8 @@ const VideoShorts = ({
             groupedShorts[short.id]?.filter((s) => s.id !== short.id) || [];
           const hasTranslations = translations.length > 0;
 
-          // Prepare segment for DubbingService
-          const segment: VideoSegment = {
-            id: short.id,
-            url: short.url,
-            thumbnailUrl: short.thumbnailUrl,
-            title: short.title,
-            dubbedVideos: dubbedVideos[short.id],
-          };
+          // Determine which video URL to use (original or dubbed)
+          const videoUrl = activeVideoUrl[short.id] || short.url;
 
           return (
             <div
@@ -231,11 +257,11 @@ const VideoShorts = ({
                     // Log outside of the JSX to avoid the void type error
                     (() => {
                       console.log(
-                        `Loading video for ${short.id} from ${short.url}`
+                        `Loading video for ${short.id} from ${videoUrl}`
                       );
                       return (
                         <video
-                          src={getResourceUrl(short.url)}
+                          src={getResourceUrl(videoUrl)}
                           poster={
                             short.thumbnailUrl
                               ? getResourceUrl(short.thumbnailUrl)
@@ -282,7 +308,7 @@ const VideoShorts = ({
 
                   <div className="flex justify-between items-center mt-2">
                     <a
-                      href={getResourceUrl(short.url)}
+                      href={getResourceUrl(videoUrl)}
                       download
                       className="text-xs px-2 py-1 bg-ai-accent text-white rounded hover:bg-ai-accent/80"
                     >
@@ -314,14 +340,14 @@ const VideoShorts = ({
                     </button>
                   </div>
 
-                  {/* New DubbingService component */}
-                  <div className="mt-2">
-                    <DubbingService
-                      segment={segment}
-                      jobId={jobId}
-                      onDubbingComplete={handleDubbingComplete}
-                    />
-                  </div>
+                  {/* Add the new DubbingPanel component */}
+                  <DubbingPanel
+                    videoId={short.id}
+                    jobId={jobId}
+                    onDubbingComplete={(language, url) =>
+                      handleDubbingComplete(short.id, language, url)
+                    }
+                  />
 
                   {/* Display YouTube link if available */}
                   {uploadingStatus[short.id] === "success" &&
@@ -353,6 +379,115 @@ const VideoShorts = ({
           );
         })}
       </div>
+
+      {/* Dubbed Videos Section */}
+      {Object.keys(dubbedVideos).length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-xl font-semibold text-white mb-4">
+            Dubbed Videos
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {Object.entries(dubbedVideos).map(([videoId, languages]) => {
+              // Find original video information
+              const originalVideo = originalShorts.find(
+                (short) => short.id === videoId
+              );
+
+              return Object.entries(languages).map(([language, url]) => {
+                // Get language label for display
+                const languageLabel = (() => {
+                  // First try the original LANGUAGE_OPTIONS
+                  const langOpt = LANGUAGE_OPTIONS.find(
+                    (l) => l.value.toLowerCase() === language.toLowerCase()
+                  );
+                  if (langOpt) return langOpt.label;
+
+                  // If not found, try DUBBING_LANGUAGE_OPTIONS
+                  const dubbingLangOpt = DUBBING_LANGUAGE_OPTIONS.find(
+                    (l) => l.value.toLowerCase() === language.toLowerCase()
+                  );
+                  if (dubbingLangOpt) {
+                    // Extract just the language name without flag emoji
+                    const labelParts = dubbingLangOpt.label.split(" ");
+                    return labelParts.length > 1
+                      ? labelParts.slice(1).join(" ")
+                      : dubbingLangOpt.label;
+                  }
+
+                  // Default fallback
+                  return language.charAt(0).toUpperCase() + language.slice(1);
+                })();
+
+                return (
+                  <div
+                    key={`${videoId}_${language}`}
+                    className="bg-ai-light rounded-lg overflow-hidden border border-ai-lighter shadow-md"
+                  >
+                    <div className="max-w-[300px] mx-auto w-full">
+                      <div className="relative aspect-[9/16] bg-ai-dark overflow-hidden">
+                        <video
+                          src={getResourceUrl(url)}
+                          controls
+                          playsInline
+                          autoPlay={false}
+                          className="w-full h-full object-contain"
+                        />
+
+                        {/* Language badge */}
+                        <div className="absolute top-2 right-2 px-2 py-1 bg-ai-accent text-white text-xs rounded-full font-medium">
+                          {languageLabel}
+                        </div>
+                      </div>
+
+                      <div className="p-2">
+                        <h3 className="font-medium text-white text-sm truncate">
+                          {originalVideo
+                            ? `${originalVideo.title} (Dubbed)`
+                            : `Video ${videoId} (Dubbed)`}
+                        </h3>
+
+                        <div className="flex justify-between items-center mt-2">
+                          <a
+                            href={getResourceUrl(url)}
+                            download
+                            className="text-xs px-2 py-1 bg-ai-accent text-white rounded hover:bg-ai-accent/80"
+                          >
+                            Download
+                          </a>
+
+                          {/* YouTube upload button */}
+                          <button
+                            onClick={() => handleUploadToYouTube(videoId)}
+                            disabled={uploadingStatus[videoId] === "uploading"}
+                            className={`text-xs px-2 py-1 rounded 
+                              ${
+                                uploadingStatus[videoId] === "uploading"
+                                  ? "bg-gray-500 text-gray-300 cursor-not-allowed"
+                                  : uploadingStatus[videoId] === "success"
+                                  ? "bg-green-500/80 text-white"
+                                  : uploadingStatus[videoId] === "error"
+                                  ? "bg-red-500/80 text-white"
+                                  : "bg-blue-500/80 text-white hover:bg-blue-600/80"
+                              }`}
+                          >
+                            {uploadingStatus[videoId] === "uploading"
+                              ? "Uploading..."
+                              : uploadingStatus[videoId] === "success"
+                              ? "Uploaded"
+                              : uploadingStatus[videoId] === "error"
+                              ? "Failed"
+                              : "Upload to YouTube"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              });
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Upload dialog */}
       <Dialog open={uploadModalOpen} onOpenChange={setUploadModalOpen}>
