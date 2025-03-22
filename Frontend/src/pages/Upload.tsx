@@ -31,35 +31,21 @@ const Upload = () => {
           setCurrentStage(data.message);
         }
 
+        // Always check for videos array and update shorts regardless of status
+        if (data.videos && data.videos.length > 0) {
+          console.log("Setting videos from API response:", data.videos);
+          setShorts(data.videos);
+        }
+
         if (data.status === "completed") {
           setIsProcessing(false);
-
-          // If the API returns videos array, use those
-          if (data.videos && data.videos.length > 0) {
-            console.log("Setting videos from API response:", data.videos);
-            setShorts(data.videos);
-          } else {
-            // Legacy output for backward compatibility
-            console.log("Using legacy format for video data");
-            setShorts([
-              {
-                id: jobId,
-                url: `/download/${jobId}`,
-                title: `Processed Video (${data.aspect_ratio || "9:16"})`,
-                description:
-                  data.segment_info?.reasoning ||
-                  "Video processed successfully",
-                thumbnail: data.thumbnail || "",
-              },
-            ]);
-          }
-
           clearInterval(interval);
         } else if (data.status === "failed") {
           setIsProcessing(false);
           setProcessMessage(data.error || "An error occurred");
           clearInterval(interval);
         }
+        // Keep polling if status is "processing" or "in_progress"
       } catch (error) {
         console.error("Error polling for status:", error);
       }

@@ -404,10 +404,15 @@ def generate_short():
                                     }
                                     videos.append(video_info)
 
-                                    # Update job info periodically
-                                    processing_jobs[job_id]["videos"] = videos
+                                    # Update job info immediately for each video
+                                    # Don't wait for all videos to complete
+                                    processing_jobs[job_id]["videos"] = videos.copy(
+                                    )
                                     processing_jobs[job_id][
-                                        "message"] = f"Generated {len(videos)} shorts..."
+                                        "message"] = f"Generated {len(videos)} shorts so far..."
+                                    # Mark the job as in_progress to indicate videos are available
+                                    # but more might still be coming
+                                    processing_jobs[job_id]["status"] = "in_progress"
 
                                 elif "image/jpeg" in part_content_type:
                                     # Handle thumbnail for the previous video (optional)
@@ -421,6 +426,9 @@ def generate_short():
                                             f.write(content)
 
                                         videos[-1]["thumbnailUrl"] = f"/shorts_output/{thumb_filename}"
+                                        # Update job info immediately with the thumbnail
+                                        processing_jobs[job_id]["videos"] = videos.copy(
+                                        )
 
                         # Remove processed part and boundary from buffer
                         buffer = buffer[boundary_index + len(boundary_bytes):]
